@@ -43,8 +43,10 @@ core-foundation = { version = "0.10.1", features = ["mac_os_10_7_support"] }
 crates-io = { version = "0.40.17", path = "crates/crates-io" }
 criterion = { version = "0.8.1", features = ["html_reports"] }
 # Use rustls instead of OpenSSL for TLS. static-curl forces building curl from source.
-curl = { version = "0.4.49", default-features = false, features = ["rustls", "static-curl"] }
-curl-sys = { version = "0.4.84", default-features = false, features = ["rustls", "static-curl"] }
+curl = { version = "0.4", default-features = false, features = ["rustls", "static-curl"] }
+# Do not upgrade curl-sys past 0.4.83
+# https://github.com/rust-lang/cargo/issues/16357
+curl-sys = { version = "0.4", default-features = false, features = ["rustls", "static-curl"] }
 filetime = "0.2.26"
 flate2 = { version = "1.1.5", default-features = false, features = ["zlib-rs"] }
 # When updating this, also see if `gix-transport` further down needs updating or some auth-related tests will fail.

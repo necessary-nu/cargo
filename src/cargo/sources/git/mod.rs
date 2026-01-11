@@ -1,16 +1,10 @@
 //! Home of the [`GitSource`].
 //!
 //! Apparently, the most important type in this module is [`GitSource`].
-//! [`utils`] provides libgit2 utilities like fetch and checkout, whereas
-//! [`oxide`] is the counterpart for gitoxide integration. [`known_hosts`]
-//! is the mitigation of [CVE-2022-46176].
-//!
-//! [CVE-2022-46176]: https://blog.rust-lang.org/2023/01/10/cve-2022-46176.html
+//! [`utils`] provides git utilities like fetch and checkout using gitoxide.
 
 pub use self::source::GitSource;
-pub use self::utils::{GitCheckout, GitDatabase, GitRemote, fetch, resolve_ref};
-mod known_hosts;
-mod oxide;
+pub use self::utils::{GitCheckout, GitDatabase, GitRemote, fetch, reinitialize_at_path, resolve_ref};
 mod source;
 mod utils;
 

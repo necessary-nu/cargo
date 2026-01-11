@@ -66,9 +66,13 @@ pub fn configure_http_handle(gctx: &GlobalContext, handle: &mut Easy) -> CargoRe
         let proxy_cainfo = proxy_cainfo.resolve_path(gctx);
         handle.proxy_cainfo(&format!("{}", proxy_cainfo.display()))?;
     }
+    // Use native CA store (required for rustls backend)
+    let mut ssl_opts = SslOpt::new();
+    ssl_opts.native_ca(true);
     if let Some(check) = http.check_revoke {
-        handle.ssl_options(SslOpt::new().no_revoke(!check))?;
+        ssl_opts.no_revoke(!check);
     }
+    handle.ssl_options(&ssl_opts)?;
 
     if let Some(user_agent) = &http.user_agent {
         handle.useragent(user_agent)?;

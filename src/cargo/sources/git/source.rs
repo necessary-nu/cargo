@@ -364,7 +364,7 @@ impl<'gctx> Source for GitSource<'gctx> {
             // Check out `actual_rev` from the database to a scoped location on the
             // filesystem. This will use hard links and such to ideally make the
             // checkout operation here pretty fast.
-            let mut checkout_path = self
+            let checkout_path = self
                 .gctx
                 .git_checkouts_path()
                 .join(&self.ident)
@@ -384,7 +384,8 @@ impl<'gctx> Source for GitSource<'gctx> {
 
                     // Reinitialize and re-fetch
                     if db_path.exists() {
-                        if let Err(reinit_err) = crate::sources::git::oxide::reinitialize(&db_path)
+                        if let Err(reinit_err) =
+                            crate::sources::git::reinitialize_at_path(&db_path)
                         {
                             trace!("reinitialize failed: {}", reinit_err);
                             return Err(e);
