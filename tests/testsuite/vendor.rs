@@ -1714,13 +1714,7 @@ fn ignore_hidden() {
     // .git should not be removed.
     assert!(p.root().join("vendor/.git").exists());
     // And just for good measure, make sure no files changed.
-    let mut opts = git2::StatusOptions::new();
-    assert!(
-        repo.statuses(Some(&mut opts))
-            .unwrap()
-            .iter()
-            .all(|status| status.status() == git2::Status::CURRENT)
-    );
+    assert!(git::is_clean(&repo), "expected no changes");
 }
 
 #[cargo_test]

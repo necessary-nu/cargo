@@ -630,19 +630,13 @@ fn package_git_submodule() {
         library.no_manifest().file("Makefile", "all:")
     });
 
-    let repository = git2::Repository::open(&project.root()).unwrap();
+    let repository = gix::open(&project.root()).unwrap();
     let url = library.root().to_url().to_string();
     git::add_submodule(&repository, &url, Path::new("bar"));
     git::commit(&repository);
 
-    let repository = git2::Repository::open(&project.root().join("bar")).unwrap();
-    repository
-        .reset(
-            &repository.revparse_single("HEAD").unwrap(),
-            git2::ResetType::Hard,
-            None,
-        )
-        .unwrap();
+    let repository = gix::open(&project.root().join("bar")).unwrap();
+    git::reset_hard(&repository, "HEAD");
 
     project
         .cargo("package --no-verify -v")
@@ -677,7 +671,7 @@ fn package_symlink_to_submodule() {
         library.no_manifest().file("Makefile", "all:")
     });
 
-    let repository = git2::Repository::open(&project.root()).unwrap();
+    let repository = gix::open(&project.root()).unwrap();
     let url = library.root().to_url().to_string();
     git::add_submodule(&repository, &url, Path::new("submodule"));
     t!(symlink(
@@ -687,14 +681,8 @@ fn package_symlink_to_submodule() {
     git::add(&repository);
     git::commit(&repository);
 
-    let repository = git2::Repository::open(&project.root().join("submodule")).unwrap();
-    repository
-        .reset(
-            &repository.revparse_single("HEAD").unwrap(),
-            git2::ResetType::Hard,
-            None,
-        )
-        .unwrap();
+    let repository = gix::open(&project.root().join("submodule")).unwrap();
+    git::reset_hard(&repository, "HEAD");
 
     project
         .cargo("package --no-verify -v")
@@ -1172,9 +1160,8 @@ to proceed despite this and include the uncommitted changes, pass the `--allow-d
 "#]])
         .run();
     // Add the ignored file and make sure it is included.
-    let mut index = t!(repo.index());
-    t!(index.add_path(Path::new("src/build/mod.rs")));
-    t!(index.write());
+    // Force add the file (bypassing .gitignore)
+    git::add_file(&repo, Path::new("src/build/mod.rs"));
     git::commit(&repo);
     p.cargo("package --list")
         .with_stderr_data("")
@@ -3268,9 +3255,8 @@ src/main.rs
 "#]])
         .run();
     p.cargo("package --allow-dirty").run();
-    let mut index = t!(repo.index());
-    t!(index.remove(Path::new("src/lib.rs"), 0));
-    t!(index.write());
+    // Stage the removal of the file from the index
+    git::rm_cached(&repo, Path::new("src/lib.rs"));
     p.cargo("package --allow-dirty --list")
         .with_stdout_data(str![[r#"
 .cargo_vcs_info.json
@@ -7526,21 +7512,14 @@ fn git_core_symlinks_false() {
     fs::create_dir_all(&root).unwrap();
     let repo = git::init(&root);
 
-    let mut cfg = repo.config().unwrap();
-    cfg.set_bool("core.symlinks", false).unwrap();
+    // Disable symlink support to test symlink-less behavior
+    git::set_config(&repo, "core.symlinks", "false");
 
-    // let's fetch from git_project so it respects our core.symlinks=false config.
-    repo.remote_anonymous(&url)
-        .unwrap()
-        .fetch(&["HEAD"], None, None)
-        .unwrap();
-    let rev = repo
-        .find_reference("FETCH_HEAD")
-        .unwrap()
-        .peel_to_commit()
-        .unwrap();
-    repo.reset(rev.as_object(), git2::ResetType::Hard, None)
-        .unwrap();
+    // Fetch from git_project so it respects our core.symlinks=false config.
+    git::fetch(&repo, &url, "HEAD:refs/heads/fetched");
+
+    // Reset hard to the fetched commit
+    git::reset_hard(&repo, "refs/heads/fetched");
 
     p.cargo("package --allow-dirty")
         .with_stderr_data(str![[r#"
@@ -7802,6 +7781,11 @@ Caused by:
 
 #[cargo_test]
 fn publish_to_crates_io_warns() {
+    let registry = registry::RegistryBuilder::new()
+        .http_api()
+        .http_index()
+        .build();
+
     let p = project()
         .file(
             "Cargo.toml",
@@ -7816,7 +7800,8 @@ fn publish_to_crates_io_warns() {
         .file("src/main.rs", "fn main() {}")
         .build();
 
-    p.cargo(&format!("publish --dry-run"))
+    p.cargo("publish --dry-run")
+        .replace_crates_io(registry.index_url())
         .with_stderr_data(str![[r#"
 [UPDATING] crates.io index
 [WARNING] manifest has no license, license-file, documentation, homepage or repository

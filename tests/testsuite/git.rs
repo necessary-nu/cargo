@@ -97,10 +97,9 @@ fn cargo_compile_git_dep_branch() {
     });
 
     // Make a new branch based on the current HEAD commit
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
-    let head = repo.head().unwrap().target().unwrap();
-    let head = repo.find_commit(head).unwrap();
-    repo.branch("branchy", &head, true).unwrap();
+    let repo = gix::open(&git_project.root()).unwrap();
+    let head = git::head_id(&repo);
+    git::branch(&repo, "branchy", &head);
 
     let project = project
         .file(
@@ -169,16 +168,8 @@ fn cargo_compile_git_dep_tag() {
     });
 
     // Make a tag corresponding to the current HEAD
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
-    let head = repo.head().unwrap().target().unwrap();
-    repo.tag(
-        "v0.1.0",
-        &repo.find_object(head, None).unwrap(),
-        &repo.signature().unwrap(),
-        "make a new tag",
-        false,
-    )
-    .unwrap();
+    let repo = gix::open(&git_project.root()).unwrap();
+    git::tag(&repo, "v0.1.0");
 
     let project = project
         .file(
@@ -248,12 +239,8 @@ fn cargo_compile_git_dep_pull_request() {
     });
 
     // Make a reference in GitHub's pull request ref naming convention.
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
-    let oid = repo.refname_to_id("HEAD").unwrap();
-    let force = false;
-    let log_message = "open pull request";
-    repo.reference("refs/pull/330/head", oid, force, log_message)
-        .unwrap();
+    let repo = gix::open(&git_project.root()).unwrap();
+    git::create_ref(&repo, "refs/pull/330/head");
 
     let project = project
         .file(
@@ -650,7 +637,7 @@ fn recompilation() {
 
     // Commit the changes and make sure we don't trigger a recompile because the
     // lock file says not to change
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
+    let repo = gix::open(&git_project.root()).unwrap();
     git::add(&repo);
     git::commit(&repo);
 
@@ -789,8 +776,8 @@ fn update_with_shared_deps() {
 
     // Modify a file manually, and commit it
     git_project.change_file("src/bar.rs", r#"pub fn bar() { println!("hello!"); }"#);
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
-    let old_head = repo.head().unwrap().target().unwrap();
+    let repo = gix::open(&git_project.root()).unwrap();
+    let old_head = git::head_id(&repo);
     git::add(&repo);
     git::commit(&repo);
 
@@ -816,7 +803,7 @@ fn update_with_shared_deps() {
 [ERROR] Unable to update [ROOTURL]/bar#0.1.2
 
 Caused by:
-  revspec '0.1.2' not found; class=Reference (4); code=NotFound (-3)
+  The ref partially named "0.1.2" could not be found
 
 "#]])
         .run();
@@ -877,7 +864,7 @@ fn dep_with_submodule() {
     });
     let git_project2 = git::new("dep2", |project| project.file("lib.rs", "pub fn dep() {}"));
 
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
+    let repo = gix::open(&git_project.root()).unwrap();
     let url = git_project2.root().to_url().to_string();
     git::add_submodule(&repo, &url, Path::new("src"));
     git::commit(&repo);
@@ -959,7 +946,7 @@ fn dep_with_relative_submodule() {
             .file("Cargo.toml", &basic_lib_manifest("deployment"))
     });
 
-    let base_repo = git2::Repository::open(&base.root()).unwrap();
+    let base_repo = gix::open(&base.root()).unwrap();
     git::add_submodule(&base_repo, "../deployment", Path::new("deployment"));
     git::commit(&base_repo);
 
@@ -1016,26 +1003,23 @@ fn dep_with_bad_submodule() {
     });
     let git_project2 = git::new("dep2", |project| project.file("lib.rs", "pub fn dep() {}"));
 
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
+    let repo = gix::open(&git_project.root()).unwrap();
     let url = git_project2.root().to_url().to_string();
     git::add_submodule(&repo, &url, Path::new("src"));
     git::commit(&repo);
 
     // now amend the first commit on git_project2 to make submodule ref point to not-found
     // commit
-    let repo = git2::Repository::open(&git_project2.root()).unwrap();
-    let original_submodule_ref = repo.refname_to_id("refs/heads/master").unwrap();
-    let commit = repo.find_commit(original_submodule_ref).unwrap();
-    commit
-        .amend(
-            Some("refs/heads/master"),
-            None,
-            None,
-            None,
-            Some("something something"),
-            None,
-        )
-        .unwrap();
+    let repo = gix::open(&git_project2.root()).unwrap();
+    git::amend_message(&repo, "something something");
+
+    // Clear out the local submodule clone from dep1 so cargo must re-fetch from the
+    // remote URL. Without this, cargo would find the original commit in the local clone.
+    let modules_path = git_project.root().join(".git/modules/src");
+    std::fs::remove_dir_all(&modules_path).unwrap();
+    // Also remove the submodule workdir
+    let submodule_workdir = git_project.root().join("src");
+    std::fs::remove_dir_all(&submodule_workdir).unwrap();
 
     let p = project
         .file(
@@ -1080,7 +1064,10 @@ Caused by:
   failed to fetch submodule `src` from [ROOTURL]/dep2
 
 Caused by:
-  revspec '[..]' not found; class=Reference (4); code=NotFound (-3)
+  An object prefixed [..] could not be found
+
+Caused by:
+  The ref partially named "[..]" could not be found
 
 "#]];
 
@@ -1104,11 +1091,21 @@ fn dep_with_skipped_submodule() {
     });
 
     // `qux` is a submodule of `bar`, but we don't want to update it.
-    let repo = git2::Repository::open(&bar.root()).unwrap();
+    let repo = gix::open(&bar.root()).unwrap();
     git::add_submodule(&repo, qux.url().as_str(), Path::new("qux"));
 
-    let mut conf = git2::Config::open(&bar.root().join(".gitmodules")).unwrap();
-    conf.set_str("submodule.qux.update", "none").unwrap();
+    // Set submodule update to "none" by appending to .gitmodules
+    let gitmodules_path = bar.root().join(".gitmodules");
+    let mut content = std::fs::read_to_string(&gitmodules_path).unwrap();
+    // Find the [submodule "qux"] section and add the update setting
+    if let Some(pos) = content.find("[submodule \"qux\"]") {
+        // Find the end of the section header line
+        if let Some(newline_pos) = content[pos..].find('\n') {
+            let insert_pos = pos + newline_pos + 1;
+            content.insert_str(insert_pos, "\tupdate = none\n");
+        }
+    }
+    std::fs::write(&gitmodules_path, &content).unwrap();
 
     git::add(&repo);
     git::commit(&repo);
@@ -1347,12 +1344,12 @@ fn two_deps_only_update_one() {
         .file("src/main.rs", "fn main() {}")
         .build();
 
-    fn oid_to_short_sha(oid: git2::Oid) -> String {
+    fn oid_to_short_sha(oid: gix::ObjectId) -> String {
         oid.to_string()[..8].to_string()
     }
     fn git_repo_head_sha(p: &Project) -> String {
-        let repo = git2::Repository::open(p.root()).unwrap();
-        let head = repo.head().unwrap().target().unwrap();
+        let repo = gix::open(p.root()).unwrap();
+        let head = git::head_id(&repo);
         oid_to_short_sha(head)
     }
 
@@ -1376,7 +1373,7 @@ fn two_deps_only_update_one() {
         .run();
 
     git1.change_file("src/lib.rs", "pub fn foo() {}");
-    let repo = git2::Repository::open(&git1.root()).unwrap();
+    let repo = gix::open(&git1.root()).unwrap();
     git::add(&repo);
     let oid = git::commit(&repo);
     println!("dep1 head sha: {}", oid_to_short_sha(oid));
@@ -1434,13 +1431,13 @@ fn stale_cached_version() {
     // Update the repo, and simulate someone else updating the lock file and then
     // us pulling it down.
     bar.change_file("src/lib.rs", "pub fn bar() -> i32 { 1 + 0 }");
-    let repo = git2::Repository::open(&bar.root()).unwrap();
+    let repo = gix::open(&bar.root()).unwrap();
     git::add(&repo);
     git::commit(&repo);
 
     sleep_ms(1000);
 
-    let rev = repo.revparse_single("HEAD").unwrap().id();
+    let rev = git::head_id(&repo);
 
     foo.change_file(
         "Cargo.lock",
@@ -1491,8 +1488,8 @@ fn dep_with_changed_submodule() {
         project.file("lib.rs", "pub fn dep() -> &'static str { \"project3\" }")
     });
 
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
-    let mut sub = git::add_submodule(&repo, git_project2.url().as_ref(), Path::new("src"));
+    let repo = gix::open(&git_project.root()).unwrap();
+    git::add_submodule(&repo, git_project2.url().as_ref(), Path::new("src"));
     git::commit(&repo);
 
     let p = project
@@ -1544,31 +1541,8 @@ project2
         .collect::<Vec<_>>();
     assert_eq!(db_paths.len(), 1, "submodule db created once");
 
-    git_project.change_file(
-        ".gitmodules",
-        &format!(
-            "[submodule \"src\"]\n\tpath = src\n\turl={}",
-            git_project3.url()
-        ),
-    );
-
-    // Sync the submodule and reset it to the new remote.
-    sub.sync().unwrap();
-    {
-        let subrepo = sub.open().unwrap();
-        subrepo
-            .remote_add_fetch("origin", "refs/heads/*:refs/heads/*")
-            .unwrap();
-        subrepo
-            .remote_set_url("origin", git_project3.url().as_ref())
-            .unwrap();
-        let mut origin = subrepo.find_remote("origin").unwrap();
-        origin.fetch(&Vec::<String>::new(), None, None).unwrap();
-        let id = subrepo.refname_to_id("refs/remotes/origin/master").unwrap();
-        let obj = subrepo.find_object(id, None).unwrap();
-        subrepo.reset(&obj, git2::ResetType::Hard, None).unwrap();
-    }
-    sub.add_to_index(true).unwrap();
+    // Reinitialize the submodule to point at dep3 instead of dep2
+    git::submodule_reinit(&repo, Path::new("src"), git_project3.url().as_ref());
     git::add(&repo);
     git::commit(&repo);
 
@@ -1748,10 +1722,18 @@ fn git_name_not_always_needed() {
             )
     });
 
-    let repo = git2::Repository::open(&p2.root()).unwrap();
-    let mut cfg = repo.config().unwrap();
-    let _ = cfg.remove("user.name");
-    let _ = cfg.remove("user.email");
+    // Remove user config from the repo so it tests with missing author info
+    let config_path = p2.root().join(".git/config");
+    if let Ok(content) = std::fs::read_to_string(&config_path) {
+        // Remove user.name and user.email from config by filtering out those lines
+        let filtered: Vec<&str> = content
+            .lines()
+            .filter(|line| {
+                !line.trim().starts_with("name =") && !line.trim().starts_with("email =")
+            })
+            .collect();
+        std::fs::write(&config_path, filtered.join("\n")).unwrap();
+    }
 
     let p = project()
         .file(
@@ -1830,7 +1812,7 @@ fn git_repo_changing_no_rebuild() {
 
     // Make a commit to lock p2 to a different rev
     bar.change_file("src/lib.rs", "pub fn bar() -> i32 { 2 }");
-    let repo = git2::Repository::open(&bar.root()).unwrap();
+    let repo = gix::open(&bar.root()).unwrap();
     git::add(&repo);
     git::commit(&repo);
 
@@ -2344,8 +2326,8 @@ fn update_one_source_updates_all_packages_in_that_git_source() {
 
     p.cargo("check").run();
 
-    let repo = git2::Repository::open(&dep.root()).unwrap();
-    let rev1 = repo.revparse_single("HEAD").unwrap().id();
+    let repo = gix::open(&dep.root()).unwrap();
+    let rev1 = git::head_id(&repo);
 
     // Just be sure to change a file
     dep.change_file("src/lib.rs", "pub fn bar() -> i32 { 2 }");
@@ -2470,15 +2452,29 @@ fn dont_require_submodules_are_checked_out() {
     });
     let git2 = git::new("dep2", |p| p);
 
-    let repo = git2::Repository::open(&git1.root()).unwrap();
+    let repo = gix::open(&git1.root()).unwrap();
     let url = git2.root().to_url().to_string();
     git::add_submodule(&repo, &url, Path::new("a/submodule"));
     git::commit(&repo);
 
-    git2::Repository::init(&p.root()).unwrap();
+    gix::init(&p.root()).unwrap();
     let url = git1.root().to_url().to_string();
     let dst = paths::home().join("foo");
-    git2::Repository::clone(&url, &dst).unwrap();
+    // Clone using gix
+    let gix_url = gix::url::parse(url.as_str().into()).unwrap();
+    let mut prepared = gix::prepare_clone(gix_url, &dst).unwrap();
+    let (mut checkout, _) = prepared
+        .fetch_then_checkout(
+            gix::progress::Discard,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+    checkout
+        .main_worktree(
+            gix::progress::Discard,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
 
     git1.cargo("check -v").cwd(&dst).run();
 }
@@ -2689,16 +2685,8 @@ fn two_at_rev_instead_of_tag() {
     });
 
     // Make a tag corresponding to the current HEAD
-    let repo = git2::Repository::open(&git.root()).unwrap();
-    let head = repo.head().unwrap().target().unwrap();
-    repo.tag(
-        "v0.1.0",
-        &repo.find_object(head, None).unwrap(),
-        &repo.signature().unwrap(),
-        "make a new tag",
-        false,
-    )
-    .unwrap();
+    let repo = gix::open(&git.root()).unwrap();
+    git::tag(&repo, "v0.1.0");
 
     let p = project()
         .file(
@@ -2878,21 +2866,17 @@ fn failed_submodule_checkout() {
         }
     });
 
-    let repo = git2::Repository::open(&git_project2.root()).unwrap();
+    let repo = gix::open(&git_project2.root()).unwrap();
     let url = format!("https://{}:{}/", addr.ip(), addr.port());
-    {
-        let mut s = repo.submodule(&url, Path::new("bar"), false).unwrap();
-        let subrepo = s.open().unwrap();
-        let mut cfg = subrepo.config().unwrap();
-        cfg.set_str("user.email", "foo@bar.com").unwrap();
-        cfg.set_str("user.name", "Foo Bar").unwrap();
-        git::commit(&subrepo);
-        s.add_finalize().unwrap();
-    }
+    // Use a fake commit ID since we can't actually clone this URL
+    // Must be non-zero or git will reject it as a null sha1
+    let fake_commit_id =
+        gix::ObjectId::from_hex(b"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef").unwrap();
+    git::add_submodule_unchecked(&repo, &url, Path::new("bar"), fake_commit_id);
     git::commit(&repo);
-    drop((repo, url));
+    drop(repo);
 
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
+    let repo = gix::open(&git_project.root()).unwrap();
     let url = git_project2.root().to_url().to_string();
     git::add_submodule(&repo, &url, Path::new("src"));
     git::commit(&repo);
@@ -2987,6 +2971,7 @@ fn use_the_cli() {
 [RUNNING] `git fetch --no-tags --verbose --force --update-head-ok [..][ROOTURL]/dep1[..] [..]+HEAD:refs/remotes/origin/HEAD[..]`
 From [ROOTURL]/dep1
  * [new ref] [..] -> origin/HEAD[..]
+ * [new branch] [..] -> origin/[..]
 [LOCKING] 1 package to latest compatible version
 [CHECKING] dep1 v0.5.0 ([ROOTURL]/dep1#[..])
 [RUNNING] `rustc --crate-name dep1 [..]`
@@ -3099,20 +3084,11 @@ one
         .run();
 
     // commit --amend a change that will require a force fetch.
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
+    let repo = gix::open(&git_project.root()).unwrap();
     git_project.change_file("src/lib.rs", r#"pub fn f() { println!("two"); }"#);
     git::add(&repo);
-    let id = repo.refname_to_id("HEAD").unwrap();
-    let commit = repo.find_commit(id).unwrap();
-    let tree_id = t!(t!(repo.index()).write_tree());
-    t!(commit.amend(
-        Some("HEAD"),
-        None,
-        None,
-        None,
-        None,
-        Some(&t!(repo.find_tree(tree_id)))
-    ));
+    // Amend the commit by creating a new commit with same message but new tree
+    git::amend(&repo);
     // Perform the fetch.
     p.cargo("update").run();
     p.cargo("build").run();
@@ -3224,7 +3200,7 @@ to proceed despite this and include the uncommitted changes, pass the `--allow-d
 "#]])
         .run();
     // Commit the change.
-    let sub_repo = git2::Repository::open(git_project.root().join("src")).unwrap();
+    let sub_repo = gix::open(git_project.root().join("src")).unwrap();
     git::add(&sub_repo);
     git::commit(&sub_repo);
     git::add(&repo);
@@ -3275,7 +3251,7 @@ to proceed despite this and include the uncommitted changes, pass the `--allow-d
 "#]])
         .run();
     // And commit the change.
-    let sub_sub_repo = git2::Repository::open(git_project.root().join("src/bar")).unwrap();
+    let sub_sub_repo = gix::open(git_project.root().join("src/bar")).unwrap();
     git::add(&sub_sub_repo);
     git::commit(&sub_sub_repo);
     git::add(&sub_repo);
@@ -3296,10 +3272,9 @@ fn default_not_master() {
             .file("Cargo.toml", &basic_lib_manifest("dep1"))
             .file("src/lib.rs", "pub fn foo() {}")
     });
-    let head_id = repo.head().unwrap().target().unwrap();
-    let head = repo.find_commit(head_id).unwrap();
-    repo.branch("main", &head, false).unwrap();
-    repo.set_head("refs/heads/main").unwrap();
+    let head_id = git::head_id(&repo);
+    git::branch(&repo, "main", &head_id);
+    git::set_head(&repo, "refs/heads/main");
 
     // Then create a commit on the new `main` branch so `master` and `main`
     // differ.
@@ -3347,7 +3322,9 @@ fn historical_lockfile_works() {
             .file("Cargo.toml", &basic_lib_manifest("dep1"))
             .file("src/lib.rs", "")
     });
-    let head_id = repo.head().unwrap().target().unwrap();
+    let head_id = git::head_id(&repo);
+    // gix creates repos with 'main' as default, but test uses branch='master' for historical compatibility
+    git::branch(&repo, "master", &head_id);
 
     let project = project
         .file(
@@ -3410,7 +3387,9 @@ fn historical_lockfile_works_with_vendor() {
             .file("Cargo.toml", &basic_lib_manifest("dep1"))
             .file("src/lib.rs", "")
     });
-    let head_id = repo.head().unwrap().target().unwrap();
+    let head_id = git::head_id(&repo);
+    // gix creates repos with 'main' as default, but test uses branch='master' for historical compatibility
+    git::branch(&repo, "master", &head_id);
 
     let project = project
         .file(
@@ -3532,7 +3511,7 @@ fn metadata_master_consistency() {
             .file("Cargo.toml", &basic_manifest("bar", "1.0.0"))
             .file("src/lib.rs", "")
     });
-    let bar_hash = git_repo.head().unwrap().target().unwrap().to_string();
+    let bar_hash = git::head_id(&git_repo).to_string();
 
     // Explicit branch="master" with a lock file created before 1.47 (does not contain ?branch=master).
     let p = project()
@@ -3783,22 +3762,13 @@ one
 "#]])
         .run();
 
-    let find_head = || t!(t!(repo.head()).peel_to_commit());
+    let find_head_id = || git::head_id(&repo);
 
     let amend_commit = |text| {
         // commit --amend a change that will require a force fetch.
         git_project.change_file("src/lib.rs", &main(text));
         git::add(&repo);
-        let commit = find_head();
-        let tree_id = t!(t!(repo.index()).write_tree());
-        t!(commit.amend(
-            Some("HEAD"),
-            None,
-            None,
-            None,
-            None,
-            Some(&t!(repo.find_tree(tree_id)))
-        ));
+        git::amend(&repo);
     };
 
     let mut rename_annoyance = 1;
@@ -3820,7 +3790,7 @@ two
 "#]]);
 
     // Try with a rev.
-    let head1 = find_head().id().to_string();
+    let head1 = find_head_id().to_string();
     let extra = format!(", rev = \"{}\"", head1);
     p.change_file("Cargo.toml", &manifest(&extra));
     verify(str![[r#"
@@ -3828,7 +3798,7 @@ two
 
 "#]]);
     amend_commit("three");
-    let head2 = find_head().id().to_string();
+    let head2 = find_head_id().to_string();
     assert_ne!(&head1, &head2);
     let extra = format!(", rev = \"{}\"", head2);
     p.change_file("Cargo.toml", &manifest(&extra));
@@ -3845,17 +3815,18 @@ three
 
 "#]]);
     amend_commit("tag-three");
-    let head = t!(t!(repo.head()).peel(git2::ObjectType::Commit));
-    t!(repo.tag("my-tag", &head, &t!(repo.signature()), "move tag", true));
+    // Force update the tag to point to new HEAD
+    git::force_tag(&repo, "my-tag", "move tag");
     verify(str![[r#"
 tag-three
 
 "#]]);
 
     // Try with a branch.
-    let br = t!(repo.branch("awesome-stuff", &find_head(), false));
-    t!(repo.checkout_tree(&t!(br.get().peel(git2::ObjectType::Tree)), None));
-    t!(repo.set_head("refs/heads/awesome-stuff"));
+    let head_id = find_head_id();
+    git::branch(&repo, "awesome-stuff", &head_id);
+    // Checkout the new branch
+    git::checkout_branch(&repo, "awesome-stuff");
     git_project.change_file("src/lib.rs", &main("awesome-three"));
     git::add(&repo);
     git::commit(&repo);
@@ -3998,12 +3969,12 @@ fn different_user_relative_submodules() {
             .file("src/lib.rs", "")
     });
 
-    let user2_repo = git2::Repository::open(&user2_git_project.root()).unwrap();
+    let user2_repo = gix::open(&user2_git_project.root()).unwrap();
     let url = "../dep2";
     git::add_submodule(&user2_repo, url, Path::new("dep2"));
     git::commit(&user2_repo);
 
-    let user1_repo = git2::Repository::open(&user1_git_project.root()).unwrap();
+    let user1_repo = gix::open(&user1_git_project.root()).unwrap();
     let url = user2_git_project.url();
     git::add_submodule(&user1_repo, url.as_str(), Path::new("user2/dep1"));
     git::commit(&user1_repo);
@@ -4069,12 +4040,10 @@ fn git_worktree_with_original_repo_renamed() {
             .file("README.md", "")
     });
 
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
+    let repo = gix::open(&git_project.root()).unwrap();
     let repo_root = repo.workdir().unwrap().parent().unwrap();
-    let opts = git2::WorktreeAddOptions::new();
-    let _ = repo
-        .worktree("bar", &repo_root.join("bar"), Some(&opts))
-        .unwrap();
+    let worktree_path = repo_root.join("bar");
+    git::add_worktree(&repo, &worktree_path, "bar");
 
     // Rename the original repository
     let new = repo_root.join("foo2");
@@ -4220,28 +4189,77 @@ fn git_worktree_with_bare_original_repo() {
             .file("README.md", "")
     });
 
-    // Create a "bare" Git repository.
-    // Keep the `.git` folder and delete the others.
+    // Create a "bare" Git repository using gix.
+    let bare_path = paths::root().join("foo-bare");
     let repo = {
-        let mut repo_builder = git2::build::RepoBuilder::new();
-        repo_builder
-            .bare(true)
-            .clone_local(git2::build::CloneLocal::Local)
-            .clone(
-                git_project.root().to_url().as_str(),
-                &paths::root().join("foo-bare"),
+        let url = gix::url::parse(git_project.root().to_url().as_str().into()).unwrap();
+        let mut prepared = gix::prepare_clone_bare(url, &bare_path).unwrap();
+        let (repo, _outcome) = prepared
+            .fetch_only(
+                gix::progress::Discard,
+                &std::sync::atomic::AtomicBool::new(false),
             )
-            .unwrap()
+            .unwrap();
+        repo
     };
     assert!(repo.is_bare());
-    let opts = git2::WorktreeAddOptions::new();
-    let wt = repo
-        .worktree("bar", &paths::root().join("bar"), Some(&opts))
+
+    // Manually create a worktree since gix doesn't have a high-level worktree add API
+    let worktree_path = paths::root().join("bar");
+    std::fs::create_dir_all(&worktree_path).unwrap();
+
+    // Create worktrees directory in bare repo
+    let worktrees_dir = bare_path.join("worktrees").join("bar");
+    std::fs::create_dir_all(&worktrees_dir).unwrap();
+
+    // Write gitdir file in worktrees directory
+    std::fs::write(
+        worktrees_dir.join("gitdir"),
+        format!("{}\n", worktree_path.join(".git").display()),
+    )
+    .unwrap();
+
+    // Write HEAD file in worktrees directory (point to main branch)
+    let head_content = std::fs::read_to_string(bare_path.join("HEAD")).unwrap();
+    std::fs::write(worktrees_dir.join("HEAD"), &head_content).unwrap();
+
+    // Write commondir to link back to the bare repo (needed for refs and objects)
+    std::fs::write(
+        worktrees_dir.join("commondir"),
+        format!("{}\n", bare_path.display()),
+    )
+    .unwrap();
+
+    // Write .git file in worktree (points to worktrees dir)
+    std::fs::write(
+        worktree_path.join(".git"),
+        format!("gitdir: {}\n", worktrees_dir.display()),
+    )
+    .unwrap();
+
+    // Checkout files to worktree using gix
+    let worktree_repo = gix::open(&worktree_path).unwrap();
+    let head_commit = worktree_repo.head_commit().unwrap();
+    let tree = head_commit.tree().unwrap();
+    let mut index = worktree_repo.index_from_tree(&tree.id).unwrap();
+    let checkout_opts = worktree_repo
+        .checkout_options(gix::worktree::stack::state::attributes::Source::IdMapping)
         .unwrap();
+    gix::worktree::state::checkout(
+        &mut index,
+        &worktree_path,
+        worktree_repo.objects.clone().into_arc().unwrap(),
+        &gix::progress::Discard,
+        &gix::progress::Discard,
+        &std::sync::atomic::AtomicBool::new(false),
+        checkout_opts,
+    )
+    .unwrap();
+    index.write(gix::index::write::Options::default()).unwrap();
 
     project
         .cargo("package --list")
-        .cwd(wt.path())
+        .cwd(&worktree_path)
         .with_stdout_data(str![[r#"
 .cargo_vcs_info.json
 Cargo.lock
@@ -4255,7 +4273,7 @@ src/lib.rs
 
     project
         .cargo("check")
-        .cwd(wt.path())
+        .cwd(&worktree_path)
         .with_stderr_data(str![[r#"
 [CHECKING] foo v0.5.0 ([ROOT]/bar)
 [FINISHED] `dev` profile [unoptimized + debuginfo] target(s) in [ELAPSED]s
@@ -4315,11 +4333,11 @@ fn dep_with_cached_submodule() {
 
     let url = git_project3.root().to_url().to_string();
 
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
+    let repo = gix::open(&git_project.root()).unwrap();
     git::add_submodule(&repo, &url, Path::new("src"));
     git::commit(&repo);
 
-    let repo2 = git2::Repository::open(&git_project2.root()).unwrap();
+    let repo2 = gix::open(&git_project2.root()).unwrap();
     git::add_submodule(&repo2, &url, Path::new("src"));
     git::commit(&repo2);
 

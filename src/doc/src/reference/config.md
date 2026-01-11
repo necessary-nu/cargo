@@ -107,7 +107,7 @@ debug = false               # HTTP debugging
 proxy = "host:port"         # HTTP proxy in libcurl format
 ssl-version = "tlsv1.3"     # TLS version to use
 ssl-version.max = "tlsv1.3" # maximum TLS version
-ssl-version.min = "tlsv1.1" # minimum TLS version
+ssl-version.min = "tlsv1.2" # minimum TLS version
 timeout = 30                # timeout for each HTTP request, in seconds
 low-speed-limit = 10        # network timeout threshold (bytes/sec)
 cainfo = "cert.pem"         # path to Certificate Authority (CA) bundle
@@ -842,14 +842,13 @@ performed. This only works on Windows.
 * Environment: `CARGO_HTTP_SSL_VERSION`
 
 This sets the minimum TLS version to use. It takes a string, with one of the
-possible values of `"default"`, `"tlsv1"`, `"tlsv1.0"`, `"tlsv1.1"`, `"tlsv1.2"`, or
-`"tlsv1.3"`.
+possible values of `"default"`, `"tlsv1.2"`, or `"tlsv1.3"`.
 
 This may alternatively take a table with two keys, `min` and `max`, which each
 take a string value of the same kind that specifies the minimum and maximum
 range of TLS versions to use.
 
-The default is a minimum version of `"tlsv1.0"` and a max of the newest version
+The default is a minimum version of `"tlsv1.2"` and a max of the newest version
 supported on your platform, typically `"tlsv1.3"`.
 
 #### `http.low-speed-limit`

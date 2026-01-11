@@ -3,6 +3,7 @@ use cargo_test_support::Project;
 use cargo_test_support::compare::assert_ui;
 use cargo_test_support::current_dir;
 use cargo_test_support::file;
+use cargo_test_support::git;
 use cargo_test_support::str;
 
 #[cargo_test]
@@ -21,8 +22,8 @@ fn case() {
             .file("src/lib.rs", "")
     });
     let branch = "dev";
-    let find_head = || git_repo.head().unwrap().peel_to_commit().unwrap();
-    git_repo.branch(branch, &find_head(), false).unwrap();
+    let head = git::head_id(&git_repo);
+    git::branch(&git_repo, branch, &head);
     let git_url = git_dep.url().to_string();
 
     snapbox::cmd::Command::cargo_ui()

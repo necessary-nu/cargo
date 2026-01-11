@@ -628,7 +628,7 @@ fn upgrade_git() {
 "#]])
         .run();
     // Modify a file.
-    let repo = git2::Repository::open(git_project.root()).unwrap();
+    let repo = gix::open(git_project.root()).unwrap();
     git_project.change_file("src/main.rs", r#"fn main() {println!("onomatopoeia");}"#);
     git::add(&repo);
     git::commit(&repo);

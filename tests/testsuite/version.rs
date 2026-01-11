@@ -60,7 +60,7 @@ release: [..]
 commit-hash: [..]
 commit-date: [..]
 host: [HOST_TARGET]
-libgit2: [..] (sys:[..] [..])
+gix: [..]
 libcurl: [..] (sys:[..] [..])
 ...
 os: [..]

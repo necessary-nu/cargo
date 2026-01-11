@@ -1,7 +1,6 @@
 //! SSH host key validation support.
 //!
-//! The only public item in this module is [`certificate_check`],
-//! which provides a callback to [`git2::RemoteCallbacks::certificate_check`].
+//! This module provides SSH host key verification for gix-based git operations.
 //!
 //! A primary goal with this implementation is to provide user-friendly error
 //! messages, guiding them to understand the issue and how to resolve it.
@@ -22,18 +21,55 @@
 //! added (it just adds a little complexity). For example, hostname patterns,
 //! and revoked markers. See "FIXME" comments littered in this file.
 
-use crate::CargoResult;
 use crate::util::context::{Definition, GlobalContext, Value};
 use crate::util::restricted_names::is_glob_pattern;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
-use git2::CertificateCheckStatus;
-use git2::cert::{Cert, SshHostKeyType};
 use hmac::Mac;
 use std::collections::HashSet;
-use std::fmt::{Display, Write};
+use std::fmt::Display;
 use std::path::{Path, PathBuf};
+
+/// SSH host key type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SshHostKeyType {
+    Rsa,
+    Dss,
+    Ecdsa256,
+    Ecdsa384,
+    Ecdsa521,
+    Ed25519,
+    Unknown,
+}
+
+impl SshHostKeyType {
+    /// Returns the name of the key type.
+    pub fn name(&self) -> &'static str {
+        match self {
+            SshHostKeyType::Rsa => "ssh-rsa",
+            SshHostKeyType::Dss => "ssh-dss",
+            SshHostKeyType::Ecdsa256 => "ecdsa-sha2-nistp256",
+            SshHostKeyType::Ecdsa384 => "ecdsa-sha2-nistp384",
+            SshHostKeyType::Ecdsa521 => "ecdsa-sha2-nistp521",
+            SshHostKeyType::Ed25519 => "ssh-ed25519",
+            SshHostKeyType::Unknown => "unknown",
+        }
+    }
+
+    /// Returns the short name of the key type.
+    pub fn short_name(&self) -> &'static str {
+        match self {
+            SshHostKeyType::Rsa => "RSA",
+            SshHostKeyType::Dss => "DSS",
+            SshHostKeyType::Ecdsa256 => "ECDSA256",
+            SshHostKeyType::Ecdsa384 => "ECDSA384",
+            SshHostKeyType::Ecdsa521 => "ECDSA521",
+            SshHostKeyType::Ed25519 => "ED25519",
+            SshHostKeyType::Unknown => "UNKNOWN",
+        }
+    }
+}
 
 /// These are host keys that are hard-coded in cargo to provide convenience.
 ///
@@ -147,195 +183,21 @@ impl Display for KnownHostLocation {
     }
 }
 
-/// The git2 callback used to validate a certificate (only ssh known hosts are validated).
-pub fn certificate_check(
-    gctx: &GlobalContext,
-    cert: &Cert<'_>,
-    host: &str,
-    port: Option<u16>,
-    config_known_hosts: Option<&Vec<Value<String>>>,
-    diagnostic_home_config: &str,
-) -> CargoResult<CertificateCheckStatus> {
-    let Some(host_key) = cert.as_hostkey() else {
-        // Return passthrough for TLS X509 certificates to use whatever validation
-        // was done in git2.
-        return Ok(CertificateCheckStatus::CertificatePassthrough);
-    };
-    // If a nonstandard port is in use, check for that first.
-    // The fallback to check without a port is handled in the HostKeyNotFound handler.
-    let host_maybe_port = match port {
-        Some(port) if port != 22 => format!("[{host}]:{port}"),
-        _ => host.to_string(),
-    };
-    // The error message must be constructed as a string to pass through the libgit2 C API.
-    match check_ssh_known_hosts(gctx, host_key, &host_maybe_port, config_known_hosts) {
-        Ok(()) => {
-            return Ok(CertificateCheckStatus::CertificateOk);
-        }
-        Err(KnownHostError::CheckError(e)) => {
-            anyhow::bail!("error: failed to validate host key:\n{:#}", e)
-        }
-        Err(KnownHostError::HostKeyNotFound {
-            hostname,
-            key_type,
-            remote_host_key,
-            remote_fingerprint,
-            other_hosts,
-        }) => {
-            // Try checking without the port.
-            if port.is_some()
-                && !matches!(port, Some(22))
-                && check_ssh_known_hosts(gctx, host_key, host, config_known_hosts).is_ok()
-            {
-                return Ok(CertificateCheckStatus::CertificateOk);
-            }
-            let key_type_short_name = key_type.short_name();
-            let key_type_name = key_type.name();
-            let known_hosts_location = user_known_host_location_to_add(diagnostic_home_config);
-            let other_hosts_message = if other_hosts.is_empty() {
-                String::new()
-            } else {
-                let mut msg = String::from(
-                    "Note: This host key was found, \
-                    but is associated with a different host:\n",
-                );
-                for known_host in other_hosts {
-                    write!(
-                        msg,
-                        "    {loc}: {patterns}\n",
-                        loc = known_host.location,
-                        patterns = known_host.patterns
-                    )
-                    .unwrap();
-                }
-                msg
-            };
-            anyhow::bail!(
-                "error: unknown SSH host key\n\
-                The SSH host key for `{hostname}` is not known and cannot be validated.\n\
-                \n\
-                To resolve this issue, add the host key to {known_hosts_location}\n\
-                \n\
-                The key to add is:\n\
-                \n\
-                {hostname} {key_type_name} {remote_host_key}\n\
-                \n\
-                The {key_type_short_name} key fingerprint is: SHA256:{remote_fingerprint}\n\
-                This fingerprint should be validated with the server administrator that it is correct.\n\
-                {other_hosts_message}\n\
-                See https://doc.rust-lang.org/stable/cargo/appendix/git-authentication.html#ssh-known-hosts \
-                for more information.\n\
-                "
-            )
-        }
-        Err(KnownHostError::HostKeyHasChanged {
-            hostname,
-            key_type,
-            old_known_host,
-            remote_host_key,
-            remote_fingerprint,
-        }) => {
-            let key_type_short_name = key_type.short_name();
-            let key_type_name = key_type.name();
-            let known_hosts_location = user_known_host_location_to_add(diagnostic_home_config);
-            let old_key_resolution = match old_known_host.location {
-                KnownHostLocation::File { path, lineno } => {
-                    let old_key_location = path.display();
-                    format!(
-                        "removing the old {key_type_name} key for `{hostname}` \
-                        located at {old_key_location} line {lineno}, \
-                        and adding the new key to {known_hosts_location}",
-                    )
-                }
-                KnownHostLocation::Config { definition } => {
-                    format!(
-                        "removing the old {key_type_name} key for `{hostname}` \
-                        loaded from Cargo's config at {definition}, \
-                        and adding the new key to {known_hosts_location}"
-                    )
-                }
-                KnownHostLocation::Bundled => {
-                    format!(
-                        "adding the new key to {known_hosts_location}\n\
-                        The current host key is bundled as part of Cargo."
-                    )
-                }
-            };
-            anyhow::bail!(
-                "error: SSH host key has changed for `{hostname}`\n\
-                *********************************\n\
-                * WARNING: HOST KEY HAS CHANGED *\n\
-                *********************************\n\
-                This may be caused by a man-in-the-middle attack, or the \
-                server may have changed its host key.\n\
-                \n\
-                The {key_type_short_name} fingerprint for the key from the remote host is:\n\
-                    SHA256:{remote_fingerprint}\n\
-                \n\
-                You are strongly encouraged to contact the server \
-                administrator for `{hostname}` to verify that this new key is \
-                correct.\n\
-                \n\
-                If you can verify that the server has a new key, you can \
-                resolve this error by {old_key_resolution}\n\
-                \n\
-                The key provided by the remote host is:\n\
-                \n\
-                {hostname} {key_type_name} {remote_host_key}\n\
-                \n\
-                See https://doc.rust-lang.org/stable/cargo/appendix/git-authentication.html#ssh-known-hosts \
-                for more information.\n\
-                "
-            )
-        }
-        Err(KnownHostError::HostKeyRevoked {
-            hostname,
-            key_type,
-            remote_host_key,
-            location,
-        }) => {
-            let key_type_short_name = key_type.short_name();
-            anyhow::bail!(
-                "error: Key has been revoked for `{hostname}`\n\
-                **************************************\n\
-                * WARNING: REVOKED HOST KEY DETECTED *\n\
-                **************************************\n\
-                This may indicate that the key provided by this host has been\n\
-                compromised and should not be accepted.
-                \n\
-                The host key {key_type_short_name} {remote_host_key} is revoked\n\
-                in {location} and has been rejected.\n\
-                "
-            )
-        }
-        Err(KnownHostError::HostHasOnlyCertAuthority { hostname, location }) => {
-            anyhow::bail!("error: Found a `@cert-authority` marker for `{hostname}`\n\
-                \n\
-                Cargo doesn't support certificate authorities for host key verification. It is\n\
-                recommended that the command line Git client is used instead. This can be achieved\n\
-                by setting `net.git-fetch-with-cli` to `true` in the Cargo config.\n\
-                \n
-                The `@cert-authority` line was found in {location}.\n\
-                \n\
-                See https://doc.rust-lang.org/stable/cargo/appendix/git-authentication.html#ssh-known-hosts \
-                for more information.\n\
-                ")
-        }
-    }
-}
+// NOTE: The certificate_check and check_ssh_known_hosts functions have been removed.
+// SSH host key verification is now handled internally by gix, which uses OpenSSH's
+// known_hosts files automatically. The bundled keys and known_hosts parsing code
+// below is preserved for potential future use.
 
 /// Checks if the given host/host key pair is known.
-fn check_ssh_known_hosts(
+/// This is used internally for testing and may be called by gix integration in the future.
+#[allow(dead_code)]
+fn check_ssh_known_hosts_internal(
     gctx: &GlobalContext,
-    cert_host_key: &git2::cert::CertHostkey<'_>,
     host: &str,
+    remote_host_key: &[u8],
+    remote_key_type: SshHostKeyType,
     config_known_hosts: Option<&Vec<Value<String>>>,
 ) -> Result<(), KnownHostError> {
-    let Some(remote_host_key) = cert_host_key.hostkey() else {
-        return Err(anyhow::format_err!("remote host key is not available").into());
-    };
-    let remote_key_type = cert_host_key.hostkey_type().unwrap();
-
     // Collect all the known host entries from disk.
     let mut known_hosts = Vec::new();
     for path in known_host_files(gctx) {
@@ -846,7 +708,7 @@ mod tests {
         match check_ssh_known_hosts_loaded(
             &khs,
             "revoked.example.com",
-            SshHostKeyType::Ed255219,
+            SshHostKeyType::Ed25519,
             &khs[6].key,
         ) {
             Err(KnownHostError::HostKeyRevoked {
@@ -904,7 +766,7 @@ mod tests {
         match check_ssh_known_hosts_loaded(
             &khs,
             "example.com",
-            SshHostKeyType::Ed255219,
+            SshHostKeyType::Ed25519,
             &khs[0].key,
         ) {
             Err(KnownHostError::HostKeyHasChanged {
@@ -941,7 +803,7 @@ mod tests {
         match check_ssh_known_hosts_loaded(
             &khs,
             "example.com",
-            SshHostKeyType::Ed255219,
+            SshHostKeyType::Ed25519,
             &khs[0].key,
         ) {
             Err(KnownHostError::HostKeyRevoked {

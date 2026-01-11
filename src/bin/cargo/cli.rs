@@ -223,23 +223,9 @@ pub fn get_version_string(is_verbose: bool) -> String {
 }
 
 fn add_libgit2(version_string: &mut String) {
-    let git2_v = git2::Version::get();
-    let lib_v = git2_v.libgit2_version();
-    let vendored = if git2_v.vendored() {
-        format!("vendored")
-    } else {
-        format!("system")
-    };
-    writeln!(
-        version_string,
-        "libgit2: {}.{}.{} (sys:{} {})",
-        lib_v.0,
-        lib_v.1,
-        lib_v.2,
-        git2_v.crate_version(),
-        vendored
-    )
-    .unwrap();
+    // Using gix instead of git2/libgit2
+    // gix version is set by the workspace dependency
+    writeln!(version_string, "gix: 0.77.0").unwrap();
 }
 
 fn add_curl(version_string: &mut String) {
@@ -261,14 +247,7 @@ fn add_curl(version_string: &mut String) {
 }
 
 fn add_ssl(version_string: &mut String) {
-    #[cfg(feature = "openssl")]
-    {
-        writeln!(version_string, "ssl: {}", openssl::version::version()).unwrap();
-    }
-    #[cfg(not(feature = "openssl"))]
-    {
-        let _ = version_string; // Silence unused warning.
-    }
+    writeln!(version_string, "ssl: rustls").unwrap();
 }
 
 /// Expands aliases recursively to collect all the command line arguments.

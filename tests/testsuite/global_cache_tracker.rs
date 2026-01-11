@@ -519,10 +519,10 @@ fn auto_gc_git() {
     // auto-gc should delete git checkouts and dbs.
 
     // Returns the short git name of a checkout.
-    let short_id = |repo: &git2::Repository| -> String {
-        let head = repo.revparse_single("HEAD").unwrap();
-        let short_id = head.short_id().unwrap();
-        short_id.as_str().unwrap().to_owned()
+    let short_id = |repo: &gix::Repository| -> String {
+        let head = git::head_id(repo);
+        // Get first 7 chars like git's short id
+        head.to_string()[..7].to_string()
     };
 
     // Set up a git dependency and fetch it and populate the database,

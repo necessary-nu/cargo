@@ -185,46 +185,70 @@ impl<'a> Retry<'a> {
 }
 
 fn maybe_spurious(err: &Error) -> bool {
-    if let Some(git_err) = err.downcast_ref::<git2::Error>() {
-        match git_err.class() {
-            git2::ErrorClass::Net
-            | git2::ErrorClass::Os
-            | git2::ErrorClass::Zlib
-            | git2::ErrorClass::Http => return git_err.code() != git2::ErrorCode::Certificate,
-            _ => (),
+    // Note: git2 error checking was removed when switching to gix.
+    // gix errors are handled via IsSpuriousError trait below.
+    //
+    // We iterate through the error chain because errors may be wrapped with
+    // additional context (e.g., via anyhow's .context()), and we need to check
+    // all errors in the chain.
+    for err in err.chain() {
+        if let Some(curl_err) = err.downcast_ref::<curl::Error>() {
+            if curl_err.is_couldnt_connect()
+                || curl_err.is_couldnt_resolve_proxy()
+                || curl_err.is_couldnt_resolve_host()
+                || curl_err.is_operation_timedout()
+                || curl_err.is_recv_error()
+                || curl_err.is_send_error()
+                || curl_err.is_http2_error()
+                || curl_err.is_http2_stream_error()
+                || curl_err.is_ssl_connect_error()
+                || curl_err.is_partial_file()
+            {
+                return true;
+            }
         }
-    }
-    if let Some(curl_err) = err.downcast_ref::<curl::Error>() {
-        if curl_err.is_couldnt_connect()
-            || curl_err.is_couldnt_resolve_proxy()
-            || curl_err.is_couldnt_resolve_host()
-            || curl_err.is_operation_timedout()
-            || curl_err.is_recv_error()
-            || curl_err.is_send_error()
-            || curl_err.is_http2_error()
-            || curl_err.is_http2_stream_error()
-            || curl_err.is_ssl_connect_error()
-            || curl_err.is_partial_file()
+        if let Some(not_200) = err.downcast_ref::<HttpNotSuccessful>() {
+            if 500 <= not_200.code && not_200.code < 600 || not_200.code == 429 {
+                return true;
+            }
+        }
+
+        use gix::protocol::transport::IsSpuriousError;
+
+        if let Some(err) = err.downcast_ref::<crate::sources::git::fetch::Error>() {
+            if err.is_spurious() {
+                return true;
+            }
+        }
+
+        if let Some(err) = err.downcast_ref::<GitCliError>() {
+            if err.is_spurious() {
+                return true;
+            }
+        }
+
+        // Check std::io::Error for spurious network errors (connection refused, etc.)
+        // This is needed for gitoxide HTTP transport errors which wrap std::io::Error.
+        if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
+            if io_err.is_spurious() {
+                return true;
+            }
+        }
+
+        // Fallback: check error message strings for common spurious network errors.
+        // This is needed because gix-transport's reqwest backend converts connection
+        // errors to std::io::Error with ErrorKind::Other, losing the original error kind.
+        // We check the error message for patterns that indicate transient network issues.
+        let msg = err.to_string().to_lowercase();
+        if msg.contains("connection refused")
+            || msg.contains("connection reset")
+            || msg.contains("connection aborted")
+            || msg.contains("timed out")
+            || msg.contains("timeout")
+            || msg.contains("broken pipe")
+            || msg.contains("try again")
+            || (msg.contains("error sending request") && msg.contains("http"))
         {
-            return true;
-        }
-    }
-    if let Some(not_200) = err.downcast_ref::<HttpNotSuccessful>() {
-        if 500 <= not_200.code && not_200.code < 600 || not_200.code == 429 {
-            return true;
-        }
-    }
-
-    use gix::protocol::transport::IsSpuriousError;
-
-    if let Some(err) = err.downcast_ref::<crate::sources::git::fetch::Error>() {
-        if err.is_spurious() {
-            return true;
-        }
-    }
-
-    if let Some(err) = err.downcast_ref::<GitCliError>() {
-        if err.is_spurious() {
             return true;
         }
     }

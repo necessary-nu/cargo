@@ -427,8 +427,8 @@ fn compile_offline_with_cached_git_dep(shallow: bool) {
             )
     });
 
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
-    let rev1 = repo.revparse_single("HEAD").unwrap().id();
+    let repo = gix::open(&git_project.root()).unwrap();
+    let rev1 = git::head_id(&repo);
 
     // Commit the changes and make sure we trigger a recompile
     git_project.change_file(

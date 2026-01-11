@@ -186,7 +186,7 @@ fn git_same_repo_different_tags() {
             .file("src/lib.rs", "pub fn tag1() {}")
     });
 
-    let repo = git2::Repository::open(&a.root()).unwrap();
+    let repo = gix::open(&a.root()).unwrap();
     git::tag(&repo, "tag1");
 
     a.change_file("src/lib.rs", "pub fn tag2() {}");
@@ -308,7 +308,7 @@ fn git_same_branch_different_revs() {
     fs::remove_dir_all(p.root().join("a/target")).unwrap();
 
     // Make a new commit on the master branch
-    let repo = git2::Repository::open(&a.root()).unwrap();
+    let repo = gix::open(&a.root()).unwrap();
     a.change_file("src/lib.rs", "pub fn f2() {}");
     git::add(&repo);
     git::commit(&repo);

@@ -35,6 +35,7 @@
 //! ```
 
 use crate::compare::InMemoryDir;
+use crate::git;
 use crate::registry::{self, FeatureMap, alt_api_path};
 use flate2::read::GzDecoder;
 use snapbox::prelude::*;
@@ -272,27 +273,11 @@ pub(crate) fn write_to_index(registry_path: &Path, name: &str, line: String, loc
     t!(fs::create_dir_all(dst.parent().unwrap()));
     t!(fs::write(&dst, prev + &line[..] + "\n"));
 
-    // Add the new file to the index.
+    // Add the new file to the index and commit.
     if !local {
-        let repo = t!(git2::Repository::open(&registry_path));
-        let mut index = t!(repo.index());
-        t!(index.add_path(Path::new(&file)));
-        t!(index.write());
-        let id = t!(index.write_tree());
-
-        // Commit this change.
-        let tree = t!(repo.find_tree(id));
-        let sig = t!(repo.signature());
-        let parent = t!(repo.refname_to_id("refs/heads/master"));
-        let parent = t!(repo.find_commit(parent));
-        t!(repo.commit(
-            Some("HEAD"),
-            &sig,
-            &sig,
-            "Another commit",
-            &tree,
-            &[&parent]
-        ));
+        let repo = gix::open(registry_path).expect("open git repo failed");
+        git::add_file(&repo, Path::new(&file));
+        git::commit(&repo);
     }
 }
 

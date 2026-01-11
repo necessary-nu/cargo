@@ -3977,11 +3977,9 @@ foo v0.1.0 ([ROOT]/foo)
 
     // Remove 0.1.1
     fs::remove_file(paths::root().join("dl/bar/0.1.1/download")).unwrap();
-    let repo = git2::Repository::open(registry_path()).unwrap();
-    let mut index = repo.index().unwrap();
+    let repo = gix::open(registry_path()).unwrap();
     fs::write(&bar_reg_path, &old_index).unwrap();
-    index.add_path(&bar_path).unwrap();
-    index.write().unwrap();
+    git::add_file(&repo, &bar_path);
     git::commit(&repo);
 
     // With `Cargo.lock` unchanged, it shouldn't have an impact.
@@ -4013,9 +4011,7 @@ foo v0.1.0 ([ROOT]/foo)
 
     // Remove the package entirely.
     fs::remove_file(paths::root().join("dl/bar/0.1.0/download")).unwrap();
-    let mut index = repo.index().unwrap();
-    index.remove(&bar_path, 0).unwrap();
-    index.write().unwrap();
+    git::rm_cached(&repo, &bar_path);
     git::commit(&repo);
     fs::remove_file(&bar_reg_path).unwrap();
 

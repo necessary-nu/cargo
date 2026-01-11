@@ -1202,10 +1202,9 @@ fn inherit_detailed_dependencies() {
     });
 
     // Make a new branch based on the current HEAD commit
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
-    let head = repo.head().unwrap().target().unwrap();
-    let head = repo.find_commit(head).unwrap();
-    repo.branch("branchy", &head, true).unwrap();
+    let repo = gix::open(&git_project.root()).unwrap();
+    let head = git::head_id(&repo);
+    git::branch(&repo, "branchy", &head);
 
     let p = project()
         .file(

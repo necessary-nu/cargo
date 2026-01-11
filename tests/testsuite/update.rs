@@ -1108,7 +1108,7 @@ rustdns.workspace = true
     git_project.change_file("src/lib.rs", r#"pub fn bar() { println!("hello!"); }"#);
     // Commit the changes and make sure we don't trigger a recompile because the
     // lock file says not to change
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
+    let repo = gix::open(&git_project.root()).unwrap();
     git::add(&repo);
     git::commit(&repo);
     p.change_file("Cargo.toml", &workspace_toml.replace("2.29.8", "2.29.81"));
@@ -1198,7 +1198,7 @@ rustdns.workspace = true
     git_project.change_file("src/lib.rs", r#"pub fn bar() { println!("hello!"); }"#);
     // Commit the changes and make sure we don't trigger a recompile because the
     // lock file says not to change
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
+    let repo = gix::open(&git_project.root()).unwrap();
     git::add(&repo);
     git::commit(&repo);
     p.change_file("Cargo.toml", &workspace_toml.replace("2.29.8", "2.29.81"));
@@ -1288,7 +1288,7 @@ rustdns.workspace = true
     git_project.change_file("src/lib.rs", r#"pub fn bar() { println!("hello!"); }"#);
     // Commit the changes and make sure we don't trigger a recompile because the
     // lock file says not to change
-    let repo = git2::Repository::open(&git_project.root()).unwrap();
+    let repo = gix::open(&git_project.root()).unwrap();
     git::add(&repo);
     git::commit(&repo);
     p.change_file("Cargo.toml", &workspace_toml.replace("2.29.8", "2.29.81"));
@@ -1311,7 +1311,7 @@ fn update_precise_git_revisions() {
     });
     let tag_name = "Nazgûl";
     git::tag(&git_repo, tag_name);
-    let tag_commit_id = git_repo.head().unwrap().target().unwrap().to_string();
+    let tag_commit_id = git::head_id(&git_repo).to_string();
 
     git_project.change_file("src/lib.rs", "fn f() {}");
     git::add(&git_repo);

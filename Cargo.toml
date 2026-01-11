@@ -42,16 +42,14 @@ color-print = "0.3.7"
 core-foundation = { version = "0.10.1", features = ["mac_os_10_7_support"] }
 crates-io = { version = "0.40.17", path = "crates/crates-io" }
 criterion = { version = "0.8.1", features = ["html_reports"] }
-curl = "0.4.49"
-# Do not upgrade curl-sys past 0.4.83
-# https://github.com/rust-lang/cargo/issues/16357
-curl-sys = "0.4.84"
+# Use rustls instead of OpenSSL for TLS. static-curl forces building curl from source.
+curl = { version = "0.4.49", default-features = false, features = ["rustls", "static-curl"] }
+curl-sys = { version = "0.4.84", default-features = false, features = ["rustls", "static-curl"] }
 filetime = "0.2.26"
 flate2 = { version = "1.1.5", default-features = false, features = ["zlib-rs"] }
-git2 = "0.20.3"
-git2-curl = "0.21.0"
 # When updating this, also see if `gix-transport` further down needs updating or some auth-related tests will fail.
-gix = { version = "0.77.0", default-features = false, features = ["progress-tree", "parallel", "dirwalk", "status"] }
+# Uses reqwest with rustls for HTTP transport (avoids curl's OpenSSL default features)
+gix = { version = "0.77.0", default-features = false, features = ["blocking-http-transport-reqwest-rust-tls", "progress-tree", "parallel", "dirwalk", "status", "revision", "worktree-mutation"] }
 glob = "0.3.3"
 handlebars = { version = "6.4.0", features = ["dir_source"] }
 hex = "0.4.3"
@@ -65,14 +63,11 @@ itertools = "0.14.0"
 jiff = { version = "0.2.17", default-features = false, features = [ "std" ] }
 jobserver = "0.1.34"
 libc = "0.2.178"
-libgit2-sys = "0.18.3"
 libloading = "0.9.0"
 memchr = "2.7.6"
 memfd = "0.6.5"
 miow = "0.6.1"
 opener = "0.8.3"
-openssl = "0.10.75"
-openssl-sys = "0.9.111"
 os_info = { version = "3.14.0", default-features = false }
 pasetors = { version = "0.7.7", features = ["v3", "paserk", "std", "serde"] }
 pathdiff = "0.2.3"
@@ -172,8 +167,6 @@ curl = { workspace = true, features = ["http2"] }
 curl-sys.workspace = true
 filetime.workspace = true
 flate2.workspace = true
-git2.workspace = true
-git2-curl.workspace = true
 gix.workspace = true
 glob.workspace = true
 hex.workspace = true
@@ -186,7 +179,6 @@ indexmap.workspace = true
 itertools.workspace = true
 jiff = { workspace = true, features = ["serde", "std"] }
 jobserver.workspace = true
-libgit2-sys.workspace = true
 memchr.workspace = true
 opener.workspace = true
 os_info.workspace = true
@@ -235,9 +227,6 @@ cargo-credential-libsecret.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 cargo-credential-macos-keychain.workspace = true
 
-[target.'cfg(not(windows))'.dependencies]
-openssl = { workspace = true, optional = true }
-
 [target.'cfg(windows)'.dependencies]
 cargo-credential-wincred.workspace = true
 
@@ -276,15 +265,10 @@ test = false
 doc = false
 
 [features]
-default = ["http-transport-curl"]
-vendored-openssl = ["openssl/vendored"]
-vendored-libgit2 = ["libgit2-sys/vendored"]
+default = []
 # This is primarily used by rust-lang/rust distributing cargo the executable.
-all-static = ['vendored-openssl', 'curl/static-curl', 'curl/force-system-lib-on-osx', 'vendored-libgit2']
-# Exactly one of 'http-transport-curl' or 'http-transport-reqwest' must be enabled
-# when using Cargo as a library. By default, it is 'http-transport-curl'.
-http-transport-curl = ["gix/blocking-http-transport-curl"]
-http-transport-reqwest = ["gix/blocking-http-transport-reqwest"]
+# With rustls, static linking is simpler - no OpenSSL vendoring needed.
+all-static = ['curl/static-curl', 'curl/force-system-lib-on-osx']
 
 [lints]
 workspace = true

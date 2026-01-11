@@ -14,10 +14,10 @@ use crate::util::interning::InternedString;
 use crate::util::{Filesystem, GlobalContext, OnceExt};
 use anyhow::Context as _;
 use cargo_util::paths;
+use gix::ObjectId;
+use std::cell::Cell;
 use std::cell::OnceCell;
-use std::cell::{Cell, Ref, RefCell};
 use std::fs::File;
-use std::mem;
 use std::path::Path;
 use std::str;
 use std::task::{Poll, ready};
@@ -62,18 +62,10 @@ pub struct RemoteRegistry<'gctx> {
     /// where to fetch from.
     index_git_ref: GitReference,
     gctx: &'gctx GlobalContext,
-    /// A Git [tree object] to help this registry find crate metadata from the
-    /// underlying Git repository.
-    ///
-    /// This is stored here to prevent Git from repeatedly creating a tree object
-    /// during each call into `load()`.
-    ///
-    /// [tree object]: https://git-scm.com/book/en/v2/Git-Internals-Git-Objects#_tree_objects
-    tree: RefCell<Option<git2::Tree<'static>>>,
     /// A Git repository that contains the actual index we want.
-    repo: OnceCell<git2::Repository>,
+    repo: OnceCell<gix::Repository>,
     /// The current HEAD commit of the underlying Git repository.
-    head: Cell<Option<git2::Oid>>,
+    head: Cell<Option<ObjectId>>,
     /// This stores sha value of the current HEAD commit for convenience.
     current_sha: Cell<Option<InternedString>>,
     /// Whether this registry needs to update package information.
@@ -102,7 +94,6 @@ impl<'gctx> RemoteRegistry<'gctx> {
             source_id,
             gctx,
             index_git_ref: GitReference::DefaultBranch,
-            tree: RefCell::new(None),
             repo: OnceCell::new(),
             head: Cell::new(None),
             current_sha: Cell::new(None),
@@ -112,14 +103,14 @@ impl<'gctx> RemoteRegistry<'gctx> {
     }
 
     /// Creates intermediate dirs and initialize the repository.
-    fn repo(&self) -> CargoResult<&git2::Repository> {
+    fn repo(&self) -> CargoResult<&gix::Repository> {
         self.repo.try_borrow_with(|| {
             trace!("acquiring registry index lock");
             let path = self
                 .gctx
                 .assert_package_cache_locked(CacheLockMode::DownloadExclusive, &self.index_path);
 
-            match git2::Repository::open(&path) {
+            match gix::open(&path) {
                 Ok(repo) => Ok(repo),
                 Err(_) => {
                     drop(paths::remove_dir_all(&path));
@@ -131,27 +122,16 @@ impl<'gctx> RemoteRegistry<'gctx> {
                     // so for compatibility with older Cargo which *does* do
                     // checkouts we make sure to initialize a new full
                     // repository (not a bare one).
-                    //
-                    // We should change this to `init_bare` whenever we feel
-                    // like enough time has passed or if we change the directory
-                    // that the folder is located in, such as by changing the
-                    // hash at the end of the directory.
-                    //
-                    // Note that in the meantime we also skip `init.templatedir`
-                    // as it can be misconfigured sometimes or otherwise add
-                    // things that we don't want.
-                    let mut opts = git2::RepositoryInitOptions::new();
-                    opts.external_template(false);
-                    Ok(git2::Repository::init_opts(&path, &opts).with_context(|| {
+                    gix::init(&path).with_context(|| {
                         format!("failed to initialize index git repository (in {:?})", path)
-                    })?)
+                    })
                 }
             }
         })
     }
 
     /// Get the object ID of the HEAD commit from the underlying Git repository.
-    fn head(&self) -> CargoResult<git2::Oid> {
+    fn head(&self) -> CargoResult<ObjectId> {
         if self.head.get().is_none() {
             let repo = self.repo()?;
             let oid = resolve_ref(&self.index_git_ref, repo)?;
@@ -160,35 +140,30 @@ impl<'gctx> RemoteRegistry<'gctx> {
         Ok(self.head.get().unwrap())
     }
 
-    /// Returns a [`git2::Tree`] object of the current HEAD commit of the
-    /// underlying Git repository.
-    fn tree(&self) -> CargoResult<Ref<'_, git2::Tree<'_>>> {
-        {
-            let tree = self.tree.borrow();
-            if tree.is_some() {
-                return Ok(Ref::map(tree, |s| s.as_ref().unwrap()));
-            }
-        }
+    /// Reads a file from the git tree at the given path.
+    fn read_file(&self, path: &Path) -> CargoResult<(Vec<u8>, String)> {
         let repo = self.repo()?;
-        let commit = repo.find_commit(self.head()?)?;
+        let head_id = self.head()?;
+        let commit = repo.find_commit(head_id)?;
         let tree = commit.tree()?;
 
-        // SAFETY:
-        // Unfortunately in libgit2 the tree objects look like they've got a
-        // reference to the repository object which means that a tree cannot
-        // outlive the repository that it came from. Here we want to cache this
-        // tree, though, so to accomplish this we transmute it to a static
-        // lifetime.
-        //
-        // Note that we don't actually hand out the static lifetime, instead we
-        // only return a scoped one from this function. Additionally the repo
-        // we loaded from (above) lives as long as this object
-        // (`RemoteRegistry`) so we then just need to ensure that the tree is
-        // destroyed first in the destructor, hence the destructor on
-        // `RemoteRegistry` below.
-        let tree = unsafe { mem::transmute::<git2::Tree<'_>, git2::Tree<'static>>(tree) };
-        *self.tree.borrow_mut() = Some(tree);
-        Ok(Ref::map(self.tree.borrow(), |s| s.as_ref().unwrap()))
+        // Convert path to a relative path string for git
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("path is not valid UTF-8: {:?}", path))?;
+
+        // Find the entry in the tree
+        let entry = tree
+            .lookup_entry_by_path(path_str)?
+            .ok_or_else(|| anyhow::anyhow!("path `{}` not found in git tree", path.display()))?;
+
+        let object_id = entry.object_id();
+        let object = repo.find_object(object_id)?;
+        let blob = object.try_into_blob().map_err(|_| {
+            anyhow::anyhow!("path `{}` is not a blob in the git repo", path.display())
+        })?;
+
+        Ok((blob.data.to_vec(), object_id.to_string()))
     }
 
     /// Gets the current version of the registry index.
@@ -280,25 +255,16 @@ impl<'gctx> RegistryData for RemoteRegistry<'gctx> {
             path: &Path,
             index_version: Option<&str>,
         ) -> CargoResult<LoadResponse> {
-            let repo = registry.repo()?;
-            let tree = registry.tree()?;
-            let entry = tree.get_path(path);
-            let entry = entry?;
-            let git_file_hash = Some(entry.id().to_string());
+            let (raw_data, git_file_hash) = registry.read_file(path)?;
 
             // Check if the cache is valid.
-            if index_version.is_some() && index_version == git_file_hash.as_deref() {
+            if index_version.is_some() && index_version == Some(&git_file_hash) {
                 return Ok(LoadResponse::CacheValid);
             }
 
-            let object = entry.to_object(repo)?;
-            let Some(blob) = object.as_blob() else {
-                anyhow::bail!("path `{}` is not a blob in the git repo", path.display())
-            };
-
             Ok(LoadResponse::Data {
-                raw_data: blob.content().to_vec(),
-                index_version: git_file_hash,
+                raw_data,
+                index_version: Some(git_file_hash),
             })
         }
 
@@ -310,15 +276,18 @@ impl<'gctx> RegistryData for RemoteRegistry<'gctx> {
                 self.needs_update = true;
                 Poll::Pending
             }
-            Err(e)
-                if e.downcast_ref::<git2::Error>()
-                    .map(|e| e.code() == git2::ErrorCode::NotFound)
-                    .unwrap_or_default() =>
-            {
-                // The repo has been updated and the file does not exist.
-                Poll::Ready(Ok(LoadResponse::NotFound))
+            Err(e) => {
+                // Check if this looks like a "not found" error.
+                // This includes cases where the ref doesn't exist (empty repo in frozen mode),
+                // or where the file path doesn't exist in the git tree.
+                let err_msg = format!("{:?}", e);
+                if err_msg.contains("not found") || err_msg.contains("did not exist") {
+                    // The repo has been updated and the file does not exist.
+                    Poll::Ready(Ok(LoadResponse::NotFound))
+                } else {
+                    Poll::Ready(Err(e))
+                }
             }
-            Err(e) => Poll::Ready(Err(e)),
         }
     }
 
@@ -368,7 +337,6 @@ impl<'gctx> RegistryData for RemoteRegistry<'gctx> {
 
         self.prepare()?;
         self.head.set(None);
-        *self.tree.borrow_mut() = None;
         self.current_sha.set(None);
         let _path = self
             .gctx
@@ -447,13 +415,5 @@ impl<'gctx> RegistryData for RemoteRegistry<'gctx> {
 
     fn is_crate_downloaded(&self, pkg: PackageId) -> bool {
         download::is_crate_downloaded(&self.cache_path, &self.gctx, pkg)
-    }
-}
-
-/// Implemented to just be sure to drop `tree` field before our other fields.
-/// See SAFETY inside [`RemoteRegistry::tree()`] for more.
-impl<'gctx> Drop for RemoteRegistry<'gctx> {
-    fn drop(&mut self) {
-        self.tree.borrow_mut().take();
     }
 }

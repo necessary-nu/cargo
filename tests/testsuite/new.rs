@@ -5,6 +5,7 @@ use std::fs::{self, File};
 
 use crate::prelude::*;
 use crate::utils::cargo_process;
+use cargo_test_support::git;
 use cargo_test_support::paths;
 use cargo_test_support::str;
 
@@ -536,9 +537,12 @@ fn git_default_branch() {
     create_default_gitconfig();
 
     cargo_process("new foo").run();
-    let repo = git2::Repository::open(paths::root().join("foo")).unwrap();
-    let head = repo.find_reference("HEAD").unwrap();
-    assert_eq!(head.symbolic_target().unwrap(), "refs/heads/master");
+    // Get symbolic ref for HEAD
+    let foo_repo = gix::open(paths::root().join("foo")).unwrap();
+    assert_eq!(
+        git::symbolic_ref_head(&foo_repo).unwrap(),
+        "refs/heads/master"
+    );
 
     fs::write(
         paths::home().join(".gitconfig"),
@@ -549,9 +553,11 @@ fn git_default_branch() {
     )
     .unwrap();
     cargo_process("new bar").run();
-    let repo = git2::Repository::open(paths::root().join("bar")).unwrap();
-    let head = repo.find_reference("HEAD").unwrap();
-    assert_eq!(head.symbolic_target().unwrap(), "refs/heads/hello");
+    let bar_repo = gix::open(paths::root().join("bar")).unwrap();
+    assert_eq!(
+        git::symbolic_ref_head(&bar_repo).unwrap(),
+        "refs/heads/hello"
+    );
 }
 
 #[cargo_test]

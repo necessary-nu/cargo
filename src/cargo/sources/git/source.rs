@@ -19,6 +19,7 @@ use crate::util::hex::short_hash;
 use crate::util::interning::InternedString;
 use anyhow::Context as _;
 use cargo_util::paths::exclude_from_backups_and_indexing;
+use gix::ObjectId;
 use std::fmt::{self, Debug, Formatter};
 use std::task::Poll;
 use tracing::trace;
@@ -162,7 +163,7 @@ impl<'gctx> GitSource<'gctx> {
     ///
     /// This won't fetch anything if the required revision is
     /// already available locally.
-    pub(crate) fn fetch_db(&self, is_submodule: bool) -> CargoResult<(GitDatabase, git2::Oid)> {
+    pub(crate) fn fetch_db(&self, is_submodule: bool) -> CargoResult<(GitDatabase, ObjectId)> {
         let db_path = self.gctx.git_db_path().join(&self.ident);
         let db_path = db_path.into_path_unlocked();
 
@@ -233,7 +234,7 @@ enum Revision {
     /// [Git reference]: https://git-scm.com/book/en/v2/Git-Internals-Git-References
     Deferred(GitReference),
     /// A locked revision of the actual Git commit object ID.
-    Locked(git2::Oid),
+    Locked(ObjectId),
 }
 
 impl Revision {
@@ -352,23 +353,61 @@ impl<'gctx> Source for GitSource<'gctx> {
         // exists.
         exclude_from_backups_and_indexing(&git_path);
 
-        let (db, actual_rev) = self.fetch_db(false)?;
+        let (db, actual_rev, short_id, checkout_path) = {
+            let (mut db, mut actual_rev) = self.fetch_db(false)?;
 
-        // Don’t use the full hash, in order to contribute less to reaching the
-        // path length limit on Windows. See
-        // <https://github.com/servo/servo/pull/14397>.
-        let short_id = db.to_short_id(actual_rev)?;
+            // Don't use the full hash, in order to contribute less to reaching the
+            // path length limit on Windows. See
+            // <https://github.com/servo/servo/pull/14397>.
+            let mut short_id = db.to_short_id(actual_rev)?;
 
-        // Check out `actual_rev` from the database to a scoped location on the
-        // filesystem. This will use hard links and such to ideally make the
-        // checkout operation here pretty fast.
-        let checkout_path = self
-            .gctx
-            .git_checkouts_path()
-            .join(&self.ident)
-            .join(short_id.as_str());
-        let checkout_path = checkout_path.into_path_unlocked();
-        db.copy_to(actual_rev, &checkout_path, self.gctx, self.quiet)?;
+            // Check out `actual_rev` from the database to a scoped location on the
+            // filesystem. This will use hard links and such to ideally make the
+            // checkout operation here pretty fast.
+            let mut checkout_path = self
+                .gctx
+                .git_checkouts_path()
+                .join(&self.ident)
+                .join(short_id.as_str());
+            let mut checkout_path = checkout_path.into_path_unlocked();
+
+            // Try to copy from db to checkout. If it fails due to a corrupt database
+            // (e.g., truncated HEAD), force a re-fetch and try again.
+            if let Err(e) = db.copy_to(actual_rev, &checkout_path, self.gctx, self.quiet) {
+                // Check if this looks like a database corruption error
+                let err_str = format!("{:?}", e);
+                if err_str.contains("corrupt") || err_str.contains("does not exist") {
+                    trace!("copy_to failed, looks like corruption - forcing re-fetch");
+                    drop(db);
+                    let db_path = self.gctx.git_db_path().join(&self.ident);
+                    let db_path = db_path.into_path_unlocked();
+
+                    // Reinitialize and re-fetch
+                    if db_path.exists() {
+                        if let Err(reinit_err) = crate::sources::git::oxide::reinitialize(&db_path)
+                        {
+                            trace!("reinitialize failed: {}", reinit_err);
+                            return Err(e);
+                        }
+                    }
+
+                    // Re-fetch the database
+                    (db, actual_rev) = self.fetch_db(false)?;
+                    short_id = db.to_short_id(actual_rev)?;
+                    checkout_path = self
+                        .gctx
+                        .git_checkouts_path()
+                        .join(&self.ident)
+                        .join(short_id.as_str())
+                        .into_path_unlocked();
+                    db.copy_to(actual_rev, &checkout_path, self.gctx, self.quiet)?;
+                } else {
+                    return Err(e);
+                }
+            }
+            (db, actual_rev, short_id, checkout_path)
+        };
+        let _ = db; // suppress unused warning
 
         let source_id = self
             .source_id

@@ -364,33 +364,23 @@ pub fn cargo_config_to_gitoxide_overrides(gctx: &GlobalContext) -> CargoResult<V
 /// Reinitializes a given Git repository. This is useful when a Git repository
 /// seems corrupted, and we want to start over.
 pub fn reinitialize(git_dir: &Path) -> CargoResult<()> {
-    fn init(path: &Path, bare: bool) -> CargoResult<()> {
-        let mut opts = git2::RepositoryInitOptions::new();
-        // Skip anything related to templates, they just call all sorts of issues as
-        // we really don't want to use them yet they insist on being used. See #6240
-        // for an example issue that comes up.
-        opts.external_template(false);
-        opts.bare(bare);
-        git2::Repository::init_opts(&path, &opts)?;
-        Ok(())
-    }
-    // Here we want to drop the current repository object pointed to by `repo`,
-    // so we initialize temporary repository in a sub-folder, blow away the
-    // existing git folder, and then recreate the git repo. Finally we blow away
-    // the `tmp` folder we allocated.
+    // Here we want to blow away the existing git folder and recreate the repo.
     debug!("reinitializing git repo at {:?}", git_dir);
-    let tmp = git_dir.join("tmp");
     let bare = !git_dir.ends_with(".git");
-    init(&tmp, false)?;
+
+    // Remove all contents
     for entry in git_dir.read_dir()? {
         let entry = entry?;
-        if entry.file_name().to_str() == Some("tmp") {
-            continue;
-        }
         let path = entry.path();
         drop(paths::remove_file(&path).or_else(|_| paths::remove_dir_all(&path)));
     }
-    init(git_dir, bare)?;
-    paths::remove_dir_all(&tmp)?;
+
+    // Reinitialize
+    if bare {
+        gix::init_bare(git_dir)?;
+    } else {
+        gix::init(git_dir)?;
+    }
+
     Ok(())
 }

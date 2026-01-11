@@ -15,7 +15,8 @@ pub fn existing_vcs_repo(path: &Path, cwd: &Path) -> bool {
             if repo.workdir().map_or(false, |workdir| workdir == path) {
                 true
             } else {
-                !repo.is_path_ignored(path).unwrap_or(false)
+                // Check if path is ignored using gix's excludes
+                !is_path_ignored(&repo, path).unwrap_or(false)
             }
         } else {
             false
@@ -25,6 +26,35 @@ pub fn existing_vcs_repo(path: &Path, cwd: &Path) -> bool {
     in_git_repo(path, cwd) || HgRepo::discover(path, cwd).is_ok()
 }
 
+fn is_path_ignored(repo: &gix::Repository, path: &Path) -> Option<bool> {
+    // Get the workdir-relative path
+    let workdir = repo.workdir()?;
+    let relative_path = path.strip_prefix(workdir).ok()?;
+
+    // Get the index (empty if no commits yet)
+    let index = repo.index_or_empty().ok()?;
+
+    // Create an exclude stack to check ignore status
+    let mut excludes = repo
+        .excludes(
+            &index,
+            None,
+            gix::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+        )
+        .ok()?;
+
+    // Check if the path is ignored
+    // Mode is None since we don't have index entry mode for an arbitrary path
+    let mode = if path.is_dir() {
+        Some(gix::index::entry::Mode::DIR)
+    } else {
+        Some(gix::index::entry::Mode::FILE)
+    };
+    let platform = excludes.at_path(relative_path, mode).ok()?;
+
+    Some(platform.is_excluded())
+}
+
 pub struct HgRepo;
 pub struct GitRepo;
 pub struct PijulRepo;
@@ -32,11 +62,11 @@ pub struct FossilRepo;
 
 impl GitRepo {
     pub fn init(path: &Path, _: &Path) -> CargoResult<GitRepo> {
-        git2::Repository::init(path)?;
+        gix::init(path)?;
         Ok(GitRepo)
     }
-    pub fn discover(path: &Path, _: &Path) -> Result<git2::Repository, git2::Error> {
-        git2::Repository::discover(path)
+    pub fn discover(path: &Path, _: &Path) -> Result<gix::Repository, gix::discover::Error> {
+        gix::discover(path)
     }
 }
 

@@ -1436,6 +1436,9 @@ pub trait TestEnvCommandExt: Sized {
             .env("CARGO_INCREMENTAL", "0")
             // Don't read the system git config which is out of our control.
             .env("GIT_CONFIG_NOSYSTEM", "1")
+            // Remove GIT_CONFIG_GLOBAL so git uses $HOME/.gitconfig instead of the shared config.
+            // This allows tests to configure their own git settings (like credential helpers).
+            .env_remove("GIT_CONFIG_GLOBAL")
             .env_remove("__CARGO_DEFAULT_LIB_METADATA")
             .env_remove("ALL_PROXY")
             .env_remove("EMAIL")
@@ -1457,6 +1460,7 @@ pub trait TestEnvCommandExt: Sized {
             .env_remove("RUSTDOCFLAGS")
             .env_remove("RUSTFLAGS")
             .env_remove("SSH_AUTH_SOCK") // ensure an outer agent is never contacted
+            .env("GIT_TERMINAL_PROMPT", "0") // prevent interactive credential prompts
             .env_remove("USER") // not set on some rust-lang docker images
             .env_remove("XDG_CONFIG_HOME") // see #2345
             .env_remove("OUT_DIR"); // see #13204

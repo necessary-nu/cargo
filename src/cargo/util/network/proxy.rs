@@ -19,9 +19,16 @@ pub fn http_proxy(http: &CargoHttpConfig) -> Option<String> {
     if let Some(s) = &http.proxy {
         return Some(s.into());
     }
-    git2::Config::open_default()
-        .and_then(|cfg| cfg.get_string("http.proxy"))
+    // Try to discover a repo and read http.proxy from its config (includes global config)
+    if let Ok(repo) = gix::discover(".") {
+        if let Some(proxy) = repo.config_snapshot().string("http.proxy") {
+            return Some(proxy.to_string());
+        }
+    }
+    // Fall back to global config if not in a repo
+    gix::config::File::from_globals()
         .ok()
+        .and_then(|cfg| cfg.string("http.proxy").map(|s| s.to_string()))
 }
 
 /// Determine if an http proxy exists.

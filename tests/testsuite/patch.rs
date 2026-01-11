@@ -2897,7 +2897,7 @@ fn perform_old_git_patch(shallow: bool) {
             .file("src/lib.rs", "")
     });
 
-    let bar_oid = bar_repo.head().unwrap().target().unwrap();
+    let bar_oid = git::head_id(&bar_repo);
 
     let p = project()
         .file(

@@ -778,7 +778,7 @@ fn errors_about_untracked_files() {
 [ERROR] the working directory of this package has uncommitted changes, and `cargo fix` can potentially perform destructive changes; if you'd like to suppress this error pass `--allow-dirty`, or commit the changes to these files:
 
   * Cargo.toml (dirty)
-  * src/ (dirty)
+  * src (dirty)
 
 
 

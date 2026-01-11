@@ -2096,13 +2096,13 @@ fn git_repo_replace() {
         .file("Cargo.toml", &basic_manifest("foo", "0.1.0"))
         .file("src/main.rs", "fn main() {}")
         .build();
-    let repo = git2::Repository::open(&p.root()).unwrap();
-    let old_rev = repo.revparse_single("HEAD").unwrap().id();
+    let repo = gix::open(&p.root()).unwrap();
+    let old_rev = git::head_id(&repo);
     cargo_process("install --git")
         .arg(p.url().to_string())
         .run();
     git::commit(&repo);
-    let new_rev = repo.revparse_single("HEAD").unwrap().id();
+    let new_rev = git::head_id(&repo);
     let mut path = paths::home();
     path.push(".cargo/.crates.toml");
 

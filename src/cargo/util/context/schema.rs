@@ -87,7 +87,11 @@ impl CargoFutureIncompatConfig {
     }
 }
 
-/// Configuration for `ssl-version` in `http` section
+/// Configuration for `ssl-version` in `http` section.
+///
+/// Valid values are `"default"`, `"tlsv1.2"`, and `"tlsv1.3"`.
+/// TLS 1.0 and 1.1 are not supported.
+///
 /// There are two ways to configure:
 ///
 /// ```text

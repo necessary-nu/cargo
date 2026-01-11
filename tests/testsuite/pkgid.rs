@@ -215,7 +215,7 @@ fn multiple_git_same_version() {
             .file("Cargo.toml", &basic_lib_manifest("xyz"))
             .file("src/lib.rs", "fn example() {}")
     });
-    let rev1 = xyz_repo.revparse_single("HEAD").unwrap().id();
+    let rev1 = git::head_id(&xyz_repo);
     xyz_project.change_file("src/lib.rs", "pub fn example() {}");
     git::add(&xyz_repo);
     let rev2 = git::commit(&xyz_repo);

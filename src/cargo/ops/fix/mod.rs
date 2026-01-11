@@ -236,29 +236,58 @@ fn check_version_control(gctx: &GlobalContext, opts: &FixOptions) -> CargoResult
 
     let mut dirty_files = Vec::new();
     let mut staged_files = Vec::new();
-    if let Ok(repo) = git2::Repository::discover(gctx.cwd()) {
-        let mut repo_opts = git2::StatusOptions::new();
-        repo_opts.include_ignored(false);
-        repo_opts.include_untracked(true);
-        for status in repo.statuses(Some(&mut repo_opts))?.iter() {
-            if let Some(path) = status.path() {
-                match status.status() {
-                    git2::Status::CURRENT => (),
-                    git2::Status::INDEX_NEW
-                    | git2::Status::INDEX_MODIFIED
-                    | git2::Status::INDEX_DELETED
-                    | git2::Status::INDEX_RENAMED
-                    | git2::Status::INDEX_TYPECHANGE => {
-                        if !opts.allow_staged {
-                            staged_files.push(path.to_string())
+
+    // Use gix status API to check for dirty/staged files
+    if let Ok(repo) = gix::discover(gctx.cwd()) {
+        if let Ok(status) = repo.status(gix::progress::Discard) {
+            if let Ok(iter) = status.into_index_worktree_iter(Vec::new()) {
+                use gix::bstr::ByteSlice;
+                for item in iter.flatten() {
+                    use gix::status::index_worktree::Item;
+                    let path = match &item {
+                        Item::Modification { rela_path, .. } => {
+                            rela_path.to_str_lossy().to_string()
+                        }
+                        Item::DirectoryContents { entry, .. } => {
+                            entry.rela_path.to_str_lossy().to_string()
+                        }
+                        Item::Rewrite { source, .. } => {
+                            source.rela_path().to_str_lossy().to_string()
+                        }
+                    };
+                    // All of these are worktree modifications (dirty)
+                    if !opts.allow_dirty {
+                        dirty_files.push(path);
+                    }
+                }
+            }
+        }
+
+        // Check for staged changes (HEAD to index diff)
+        if let Ok(head_commit) = repo.head_commit() {
+            if let Ok(head_tree) = head_commit.tree() {
+                if let Ok(index) = repo.index() {
+                    use gix::bstr::ByteSlice;
+                    // Compare HEAD tree to index for staged changes
+                    for entry in index.entries() {
+                        let path_bstr = entry.path(&index);
+                        let path_str = path_bstr.to_str_lossy().to_string();
+                        // Convert BStr to Path for tree lookup
+                        let path_for_lookup = Path::new(path_str.as_str());
+                        // Check if this entry differs from HEAD
+                        let entry_in_head = head_tree
+                            .lookup_entry_by_path(path_for_lookup)
+                            .ok()
+                            .flatten();
+                        let is_staged = match entry_in_head {
+                            None => true, // New file staged
+                            Some(head_entry) => head_entry.object_id() != entry.id,
+                        };
+                        if is_staged && !opts.allow_staged {
+                            staged_files.push(path_str);
                         }
                     }
-                    _ => {
-                        if !opts.allow_dirty {
-                            dirty_files.push(path.to_string())
-                        }
-                    }
-                };
+                }
             }
         }
     }

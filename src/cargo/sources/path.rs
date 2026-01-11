@@ -709,6 +709,17 @@ fn list_files_gix(
         "BUG: paths used internally are absolute, and the repo inherits that"
     );
 
+    // Build gitignore patterns for checking tracked symlinks-to-directories.
+    // Git normally ignores patterns for tracked files, but cargo wants to
+    // treat tracked symlinks to directories as if they were directories for
+    // gitignore pattern matching (so patterns like "/dir/" match symlinks).
+    let mut gitignore_builder = GitignoreBuilder::new(root);
+    let gitignore_path = root.join(".gitignore");
+    if gitignore_path.exists() {
+        gitignore_builder.add(&gitignore_path);
+    }
+    let gitignore = gitignore_builder.build()?;
+
     let pkg_path = pkg.root();
     let repo_relative_pkg_path = pkg_path.strip_prefix(root).unwrap_or(Path::new(""));
     let target_prefix = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(
@@ -805,6 +816,7 @@ fn list_files_gix(
             continue;
         }
 
+        let is_symlink = kind == Some(gix::dir::entry::Kind::Symlink);
         let is_dir = kind.map_or(false, |kind| {
             if kind == gix::dir::entry::Kind::Symlink {
                 // Symlinks must be checked to see if they point to a directory
@@ -815,6 +827,21 @@ fn list_files_gix(
             }
         });
         if is_dir {
+            // For tracked symlinks pointing to directories, check if they match
+            // gitignore patterns when treated as directories. This handles patterns
+            // like "/dir/" which should match symlinks to directories.
+            if is_symlink {
+                if let Ok(relative_path) = file_path.strip_prefix(root) {
+                    if gitignore
+                        .matched_path_or_any_parents(relative_path, /* is_dir */ true)
+                        .is_ignore()
+                    {
+                        trace!("  skipping ignored symlink dir {}", file_path.display());
+                        continue;
+                    }
+                }
+            }
+
             // This could be a submodule, or a sub-repository. In any case, we prefer to walk
             // it with git-support to leverage ignored files and to avoid pulling in entire
             // .git repositories.
