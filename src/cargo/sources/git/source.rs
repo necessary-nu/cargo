@@ -384,8 +384,7 @@ impl<'gctx> Source for GitSource<'gctx> {
 
                     // Reinitialize and re-fetch
                     if db_path.exists() {
-                        if let Err(reinit_err) =
-                            crate::sources::git::reinitialize_at_path(&db_path)
+                        if let Err(reinit_err) = crate::sources::git::reinitialize_at_path(&db_path)
                         {
                             trace!("reinitialize failed: {}", reinit_err);
                             return Err(e);

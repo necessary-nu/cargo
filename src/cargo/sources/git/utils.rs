@@ -906,50 +906,45 @@ fn fetch_with_gitoxide(
             // again. If it looks like any other kind of error, or if we've already
             // blown away the repository, then we want to return the error as-is.
             loop {
-                let res = open_repo(
-                    repo_path,
-                    config_overrides.clone(),
-                    OpenMode::ForFetch,
-                )
-                .map_err(crate::sources::git::fetch::Error::from)
-                .and_then(|repo| {
-                    debug!("initiating fetch of {refspecs:?} from {remote_url}");
-                    let url_for_authentication = &mut *url_for_authentication;
-                    let remote = repo
-                        .remote_at(remote_url)?
-                        .with_fetch_tags(if tags {
-                            gix::remote::fetch::Tags::All
-                        } else {
-                            gix::remote::fetch::Tags::Included
-                        })
-                        .with_refspecs(
-                            refspecs.iter().map(|s| s.as_str()),
-                            gix::remote::Direction::Fetch,
-                        )
-                        .map_err(crate::sources::git::fetch::Error::Other)?;
-                    let url = remote
-                        .url(gix::remote::Direction::Fetch)
-                        .expect("set at init")
-                        .to_owned();
-                    let connection = remote.connect(gix::remote::Direction::Fetch)?;
-                    let mut authenticate = connection.configured_credentials(url)?;
-                    let connection = connection.with_credentials(
-                        move |action: gix::protocol::credentials::helper::Action| {
-                            if let Some(url) = action
-                                .context()
-                                .and_then(|gctx| gctx.url.as_ref().filter(|url| *url != remote_url))
-                            {
-                                url_for_authentication(url.as_ref());
-                            }
-                            authenticate(action)
-                        },
-                    );
-                    let outcome = connection
-                        .prepare_fetch(&mut progress, gix::remote::ref_map::Options::default())?
-                        .with_shallow(shallow.clone())
-                        .receive(&mut progress, should_interrupt)?;
-                    Ok(outcome)
-                });
+                let res = open_repo(repo_path, config_overrides.clone(), OpenMode::ForFetch)
+                    .map_err(crate::sources::git::fetch::Error::from)
+                    .and_then(|repo| {
+                        debug!("initiating fetch of {refspecs:?} from {remote_url}");
+                        let url_for_authentication = &mut *url_for_authentication;
+                        let remote = repo
+                            .remote_at(remote_url)?
+                            .with_fetch_tags(if tags {
+                                gix::remote::fetch::Tags::All
+                            } else {
+                                gix::remote::fetch::Tags::Included
+                            })
+                            .with_refspecs(
+                                refspecs.iter().map(|s| s.as_str()),
+                                gix::remote::Direction::Fetch,
+                            )
+                            .map_err(crate::sources::git::fetch::Error::Other)?;
+                        let url = remote
+                            .url(gix::remote::Direction::Fetch)
+                            .expect("set at init")
+                            .to_owned();
+                        let connection = remote.connect(gix::remote::Direction::Fetch)?;
+                        let mut authenticate = connection.configured_credentials(url)?;
+                        let connection = connection.with_credentials(
+                            move |action: gix::protocol::credentials::helper::Action| {
+                                if let Some(url) = action.context().and_then(|gctx| {
+                                    gctx.url.as_ref().filter(|url| *url != remote_url)
+                                }) {
+                                    url_for_authentication(url.as_ref());
+                                }
+                                authenticate(action)
+                            },
+                        );
+                        let outcome = connection
+                            .prepare_fetch(&mut progress, gix::remote::ref_map::Options::default())?
+                            .with_shallow(shallow.clone())
+                            .receive(&mut progress, should_interrupt)?;
+                        Ok(outcome)
+                    });
                 let err = match res {
                     Ok(_) => break,
                     Err(e) => e,

@@ -4,7 +4,9 @@
 //! [`utils`] provides git utilities like fetch and checkout using gitoxide.
 
 pub use self::source::GitSource;
-pub use self::utils::{GitCheckout, GitDatabase, GitRemote, fetch, reinitialize_at_path, resolve_ref};
+pub use self::utils::{
+    GitCheckout, GitDatabase, GitRemote, fetch, reinitialize_at_path, resolve_ref,
+};
 mod source;
 mod utils;
 

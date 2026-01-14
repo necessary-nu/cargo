@@ -51,7 +51,7 @@ filetime = "0.2.26"
 flate2 = { version = "1.1.5", default-features = false, features = ["zlib-rs"] }
 # When updating this, also see if `gix-transport` further down needs updating or some auth-related tests will fail.
 # Uses curl with rustls for HTTP transport (unified TLS stack with cargo's curl)
-gix = { git = "https://github.com/bbqsrc/gitoxide", branch = "fix-curl-defaults", version = "0.77.0", default-features = false, features = ["blocking-http-transport-curl-rustls", "progress-tree", "parallel", "dirwalk", "status", "revision", "worktree-mutation"] }
+gix = { git = "https://github.com/bbqsrc/gitoxide", version = "0.77.0", default-features = false, features = ["blocking-http-transport-curl-rustls", "progress-tree", "parallel", "dirwalk", "status", "revision", "worktree-mutation"] }
 glob = "0.3.3"
 handlebars = { version = "6.4.0", features = ["dir_source"] }
 hex = "0.4.3"
