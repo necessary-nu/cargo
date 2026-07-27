@@ -272,3 +272,20 @@ default = []
 [lints]
 workspace = true
 
+
+# The gitoxide fork these depend on also ships them as crates.io versions at the
+# same numbers; without redirecting the crates.io copies to the fork, the lock
+# carries each twice (git + registry), which `cargo vendor` cannot place. Point
+# them all at the fork so there is one source per crate.
+[patch.crates-io]
+gix-command = { git = "https://github.com/bbqsrc/gitoxide" }
+gix-features = { git = "https://github.com/bbqsrc/gitoxide" }
+gix-packetline = { git = "https://github.com/bbqsrc/gitoxide" }
+gix-path = { git = "https://github.com/bbqsrc/gitoxide" }
+gix-quote = { git = "https://github.com/bbqsrc/gitoxide" }
+gix-sec = { git = "https://github.com/bbqsrc/gitoxide" }
+gix-trace = { git = "https://github.com/bbqsrc/gitoxide" }
+gix-transport = { git = "https://github.com/bbqsrc/gitoxide" }
+gix-url = { git = "https://github.com/bbqsrc/gitoxide" }
+gix-utils = { git = "https://github.com/bbqsrc/gitoxide" }
+gix-validate = { git = "https://github.com/bbqsrc/gitoxide" }
